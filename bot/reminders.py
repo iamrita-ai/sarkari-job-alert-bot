@@ -274,7 +274,9 @@ async def _render_saved(update: Update, context: ContextTypes.DEFAULT_TYPE,
     state["page"] = min(state["page"], total_pages - 1)
     page = state["page"]
     page_items = saved[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
-    text = cards.saved_list_card(page_items, page, total_pages)
+    username = context.application.bot_data.get("bot_username")
+    deep_base = f"https://t.me/{username}?start=j" if username else None
+    text = cards.saved_list_card(page_items, page, total_pages, deep_base)
     markup = keyboards.saved_browse_keyboard(page, total_pages, page_items)
     if edit and update.callback_query is not None:
         await update.callback_query.edit_message_text(
@@ -282,7 +284,9 @@ async def _render_saved(update: Update, context: ContextTypes.DEFAULT_TYPE,
             disable_web_page_preview=True,
         )
     else:
-        await update.effective_message.reply_markdown_v2(text, reply_markup=markup)
+        await update.effective_message.reply_markdown_v2(
+            text, reply_markup=markup, disable_web_page_preview=True
+        )
 
 
 async def saved_browser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -299,18 +303,8 @@ async def saved_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
         await _render_saved(update, context, user_id, edit=True)
         return
-    if action.startswith("o:"):
-        _, page_raw, idx_raw = query.data.split(":")
-        saved = await context.application.bot_data["db"].list_saved(user_id)
-        flat = int(page_raw) * PAGE_SIZE + int(idx_raw)
-        if not 0 <= flat < len(saved):
-            await query.answer("Job no longer available.", show_alert=True)
-            return
-        await query.answer()
-        item = saved[flat]
-        from bot.browser import _open_job_card
-        fake_job = JobSummary(item.job_id, item.title, item.url, item.last_date)
-        await _open_job_card(update, context, fake_job)
+    # Titles are deep links handled by /start; nothing else to do here.
+    await query.answer()
 
 
 # ------------------------------------------------------------- registration

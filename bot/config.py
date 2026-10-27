@@ -33,8 +33,12 @@ OWNER_USERNAMES: set[str] = {
 CHECK_INTERVAL_MINUTES: float = float(os.getenv("CHECK_INTERVAL_MINUTES", "30"))
 
 # --- Storage --------------------------------------------------------------
+# "sqlite" (default, zero setup) or "mongodb" (needs requirements-mongo.txt)
+DATABASE_BACKEND: str = os.getenv("DATABASE_BACKEND", "sqlite").strip().lower()
 DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "bot.db"))
 Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
+MONGODB_URI: str = os.getenv("MONGODB_URI", "").strip()
+MONGODB_DATABASE: str = os.getenv("MONGODB_DATABASE", "sarkari_job_bot").strip()
 
 # --- Health-check server (Render / getvoroa / Voroa) ----------------------
 ENABLE_HEALTH_SERVER: bool = _get_bool("ENABLE_HEALTH_SERVER", True)

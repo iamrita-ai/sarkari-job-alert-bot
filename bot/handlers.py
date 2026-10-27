@@ -72,13 +72,17 @@ async def track_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def _send_banner(message, caption: str, markup=None) -> None:
     banner = Path(config.START_BANNER_PATH)
     if banner.exists():
-        with banner.open("rb") as photo:
-            await message.reply_photo(
-                photo=photo, caption=caption,
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=markup,
-            )
-    else:  # graceful degradation if the asset is missing
-        await message.reply_markdown_v2(caption, reply_markup=markup)
+        try:
+            with banner.open("rb") as photo:
+                await message.reply_photo(
+                    photo=photo, caption=caption,
+                    parse_mode=ParseMode.MARKDOWN_V2, reply_markup=markup,
+                )
+            return
+        except Exception:  # noqa: BLE001 - caption/image issue must never block /start
+            logger.exception("Banner photo failed, falling back to a text message")
+    # Graceful degradation: missing asset OR any Telegram send error
+    await message.reply_markdown_v2(caption, reply_markup=markup)
 
 
 # ------------------------------------------------------------- deep links
@@ -506,7 +510,21 @@ async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Last-resort guard: log the failure and keep the bot alive."""
-    logger.exception("Unhandled error while processing update %s", update, exc_info=context.error)
+    from telegram.error import Conflict, NetworkError, TimedOut
+
+    error = context.error
+    # Two instances polling with the same token - operational, not a code bug.
+    if isinstance(error, Conflict):
+        logger.warning(
+            "Polling conflict: another instance is using this token. Stop the "
+            "duplicate deployment (only ONE bot instance can run per token)."
+        )
+        return
+    if isinstance(error, (NetworkError, TimedOut)):
+        logger.warning("Telegram network hiccup: %s", error)
+        return
+
+    logger.exception("Unhandled error while processing update %s", update, exc_info=error)
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(

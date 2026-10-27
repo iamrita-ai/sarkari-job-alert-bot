@@ -33,8 +33,9 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
   when the vacancy image is available, falling back to text automatically
 - 🎨 **Genuinely coloured inline buttons** — Bot API `style` (PTB 22.7+):
   blue `primary`, green `success` (Apply / Done), red `danger` (Pause / last-date)
-- 📄 **Paginated browsing** — `/latest` and `/scrape_now` render Next / Previous
-  browsers; tap any numbered item to open its full card
+- 📄 **Paginated browsing** — `/latest` and `/scrape_now` render clean
+  **Previous / Next** browsers; each job title is a deep link that reopens the
+  full card (with Save / Reminder / Apply) inside the bot
 - 🔍 **Inline mode** — type `@your_bot <keyword>` in any chat, pick a result and
   it posts the job card; an *Open in Bot* deep link reopens it inside the bot DM
 - 🔖 **Save jobs & set date reminders** — bookmark any vacancy, then get a
@@ -140,12 +141,17 @@ sarkari-job-alert-bot/
 │   ├── reminders.py    # save jobs, date reminders, JobQueue re-arming
 │   ├── handlers.py     # commands, 5-step profile conversation, menus, admin
 │   ├── scheduler.py    # periodic scrape → match → photo/text notify pipeline
+│   ├── storage_mongo.py # optional MongoDB backend (same interface as db.py)
 │   ├── health.py       # /health HTTP server
 │   ├── utils.py        # MarkdownV2 escaping, DOB/age maths, deep-link codec
 │   └── main.py         # entry point
 ├── assets/
 │   └── start_banner.jpg
-├── tests/              # 20 offline tests (parsers, cards, age rules, storage)
+├── scripts/
+│   ├── github_push.sh  # create + push the GitHub repo
+│   └── termux_setup.sh # one-shot Termux/Android setup
+├── DEPLOYMENT.md       # PC, Termux, Docker, MongoDB Atlas guides
+├── tests/              # 26 offline tests (parsers, MD lint, age, storage)
 ├── scripts/github_push.sh
 ├── Dockerfile
 ├── docker-compose.yml
@@ -157,6 +163,10 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.3** — strict MarkdownV2 linting (fixes the `/start` parse-entity crash),
+  banner text fallback, Previous/Next-only browsers with bot deep-link titles,
+  graceful 409 conflict handling, optional MongoDB backend, Termux + PC
+  terminal deployment guides
 - **v1.2** — DOB + age matching with category relaxation, coloured `style`
   buttons, MarkdownV2 cards with salary/fee/image, inline mode, paginated
   browsers, save & reminder system, welcome banner, PTB v22.8
@@ -166,41 +176,37 @@ sarkari-job-alert-bot/
 
 ---
 
-## 🚀 Local development
-
-### 1. Create the bot token
-
-1. Open Telegram, search **@BotFather**
-2. Send `/newbot`, choose a name and username
-3. Copy the token (looks like `8123456789:AAH...`)
-
-### 2. Install & configure
+## 🚀 Quick start (PC terminal)
 
 ```bash
-git clone https://github.com/<your-user>/sarkari-job-alert-bot.git
+git clone https://github.com/iamrita-ai/sarkari-job-alert-bot.git
 cd sarkari-job-alert-bot
 
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-cp .env.example .env
-# edit .env and paste your BOT_TOKEN
-```
-
-### 3. Run
-
-```bash
+cp .env.example .env               # paste BOT_TOKEN from @BotFather
 python -m bot.main
 ```
 
-Open your bot in Telegram and send `/start`.
+Then open your bot in Telegram and send `/start`.
 
-### 4. Run the tests
+### 📱 Termux (Android), systemd, Docker & MongoDB
+
+**Full step-by-step guides live in [DEPLOYMENT.md](DEPLOYMENT.md):**
+
+- PC terminal on Linux / macOS / WSL / Windows (+ background systemd service)
+- Termux on Android: install, env vars, 24×7 background, reboot auto-start
+- Render / Voroa Docker deploys and the single-instance token rule
+- Optional **MongoDB Atlas** backend (`DATABASE_BACKEND=mongodb`)
+- Troubleshooting table (409 conflict, parse-entity errors, timeouts…)
+
+### Run the tests
 
 ```bash
 pip install pytest
-pytest -q
+pytest -q        # 26 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards
 ```
 
 ---
@@ -274,7 +280,10 @@ docker run -d --name sarkari-bot \
 | `BOT_TOKEN` | — | **Required.** Telegram token from @BotFather |
 | `CHECK_INTERVAL_MINUTES` | `30` | Delay between automatic scrape cycles |
 | `OWNER_USERNAMES` | `TechnicalSerena,Xioqui_xin` | Comma-separated admin usernames (no `@`) |
+| `DATABASE_BACKEND` | `sqlite` | `sqlite` or `mongodb` (Mongo needs requirements-mongo.txt) |
 | `DATABASE_PATH` | `data/bot.db` | SQLite file location |
+| `MONGODB_URI` | — | Atlas/self-hosted Mongo connection string when backend=mongodb |
+| `MONGODB_DATABASE` | `sarkari_job_bot` | Mongo database name |
 | `ENABLE_HEALTH_SERVER` | `true` | Serve `/health` on `PORT` |
 | `PORT` | `8080` | Health-server port (Render sets this automatically) |
 | `MIRROR_BASE_URL` | `https://sarkariresult.com.cm` | Primary CloudFront-free mirror |

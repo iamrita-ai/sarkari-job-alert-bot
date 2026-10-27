@@ -154,24 +154,20 @@ def reminder_keyboard(job_id: str, has_last_date: bool) -> InlineKeyboardMarkup:
 
 
 # ----------------------------------------------------------- browsers
+# Browsers expose ONLY Previous / Next (with a page indicator and Home).
+# Job titles in the message body are tappable deep links that reopen the full
+# job card inside the bot.
 def browse_keyboard(page: int, total_pages: int, page_jobs) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    open_row: list[InlineKeyboardButton] = []
-    for index, _job in enumerate(page_jobs):
-        open_row.append(InlineKeyboardButton(
-            str(index + 1), callback_data=f"br:o:{page}:{index}"
-        ))
-    if open_row:
-        rows.append(open_row)
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀ Previous", callback_data="br:p", style=BLUE))
-    nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="br:noop"))
+    nav.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="br:noop"))
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("Next ▶", callback_data="br:n", style=BLUE))
-    rows.append(nav)
-    rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="br:home")])
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup([
+        nav,
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="br:home")],
+    ])
 
 
 def back_to_list_keyboard(kind: str) -> InlineKeyboardMarkup:
@@ -181,19 +177,13 @@ def back_to_list_keyboard(kind: str) -> InlineKeyboardMarkup:
 
 
 def saved_browse_keyboard(page: int, total_pages: int, page_items) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    open_row = [
-        InlineKeyboardButton(str(i + 1), callback_data=f"sv:o:{page}:{i}")
-        for i, _ in enumerate(page_items)
-    ]
-    if open_row:
-        rows.append(open_row)
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀ Previous", callback_data="sv:p", style=BLUE))
-    nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="br:noop"))
+    nav.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="br:noop"))
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("Next ▶", callback_data="sv:n", style=BLUE))
-    rows.append(nav)
-    rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="br:home")])
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup([
+        nav,
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="br:home")],
+    ])

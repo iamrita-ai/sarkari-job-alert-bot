@@ -123,37 +123,52 @@ def profile_card(profile: UserProfile) -> str:
     )
 
 
-def list_page(jobs: list[JobSummary], page: int, total_pages: int, heading: str) -> str:
+def _job_href(job_id: str, external_url: str, deep_base: str | None) -> str:
+    """Deep link back into the bot when possible, else the external page."""
+    if deep_base:
+        from bot.utils import encode_job_id
+
+        return deep_base + encode_job_id(job_id)
+    return external_url
+
+
+def list_page(jobs: list[JobSummary], page: int, total_pages: int,
+              heading: str, deep_base: str | None = None) -> str:
     # ``jobs`` is already the slice for this page; browser keeps the page index.
     lines = [
         f"🔔 *{md_escape(heading)}*",
         f"📄 Page {page + 1} / {max(total_pages, 1)}",
+        "👆 Tap a job title to open its full card inside this bot",
         DIVIDER,
     ]
     for index, job in enumerate(jobs, start=1):
         date_tag = f" {code(job.last_date)}" if job.last_date else ""
-        lines.append(f"{index}\\. {link(job.title, job.url)}{date_tag}")
+        href = _job_href(job.job_id, job.url, deep_base)
+        lines.append(f"{index}\\. {link(job.title, href)}{date_tag}")
     if not jobs:
-        lines.append("No vacancies on this page.")
+        lines.append("No vacancies on this page\\.")
     lines.append(DIVIDER)
     lines.append(f"🤖 {md_escape(config.OWNER_HANDLES)}")
     return "\n".join(lines)
 
 
-def saved_list_card(saved: list, page: int, total_pages: int) -> str:
+def saved_list_card(saved: list, page: int, total_pages: int,
+                    deep_base: str | None = None) -> str:
     lines = [
         "🔖 *Your Saved Jobs*",
         f"📄 Page {page + 1} / {max(total_pages, 1)}",
+        "👆 Tap a title to reopen the full card",
         DIVIDER,
     ]
     for index, item in enumerate(saved, start=1):
         date_tag = f" {code(item.last_date)}" if item.last_date else ""
-        reminder = ""
-        if item.reminder_date:
-            reminder = " ⏰"
-        lines.append(f"{index}\\. {link(item.title, item.url)}{date_tag}{reminder}")
+        reminder = " ⏰" if item.reminder_date else ""
+        href = _job_href(item.job_id, item.url, deep_base)
+        lines.append(f"{index}\\. {link(item.title, href)}{date_tag}{reminder}")
     if not saved:
-        lines.append("You haven't saved any jobs yet. Tap 🔖 on any job card.")
+        lines.append(
+            "You haven't saved any jobs yet\\. Tap 🔖 on any job card\\."
+        )
     lines.append(DIVIDER)
     lines.append(f"🤖 {md_escape(config.OWNER_HANDLES)}")
     return "\n".join(lines)
@@ -164,9 +179,9 @@ def welcome_caption() -> str:
         "🚀 *Welcome to Sarkari Job Alert Bot*\n"
         f"{DIVIDER}\n"
         "I watch Sarkari Result around the clock and message you the moment a "
-        "government job matches your profile.\n\n"
+        "government job matches your profile\\.\n\n"
         "Tap the button below to create your profile in 5 quick steps "
-        "\\(name, D\\.O\\.B, category, qualification, job choices\\)."
+        "\\(name, D\\.O\\.B, category, qualification, job choices\\)\\."
     )
 
 
@@ -199,8 +214,8 @@ def about_text() -> str:
         f"{DIVIDER}\n"
         "Scrapes the latest government vacancy listings and pushes personalised "
         "Telegram alerts based on your category, age, qualification and preferred "
-        "job sectors.\n\n"
-        "⚙️ Python · python-telegram-bot v22 · BeautifulSoup · SQLite\n"
+        "job sectors\\.\n\n"
+        "⚙️ Python · python\\-telegram\\-bot v22 · BeautifulSoup · SQLite\n"
         "🔄 Automatic checks around the clock · image alerts · reminders\n\n"
         "👑 *Bot Owners*\n"
         "• @TechnicalSerena\n"

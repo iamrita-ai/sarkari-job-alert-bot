@@ -16,6 +16,23 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+async def build_database():
+    """Storage factory: SQLite by default, MongoDB when DATABASE_BACKEND=mongodb.
+
+    Both backends expose the identical async method surface.
+    """
+    from bot import config
+
+    if config.DATABASE_BACKEND == "mongodb":
+        from bot.storage_mongo import MongoDatabase
+
+        database = MongoDatabase(config.MONGODB_URI, config.MONGODB_DATABASE)
+    else:
+        database = Database(config.DATABASE_PATH)
+    await database.connect()
+    return database
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = path

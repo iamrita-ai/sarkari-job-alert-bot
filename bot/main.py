@@ -7,7 +7,7 @@ from telegram import BotCommand, Update
 from telegram.ext import Application
 
 from bot import config
-from bot.db import Database
+from bot.db import build_database
 from bot.handlers import register_handlers
 from bot.health import start_health_server
 from bot.inline import register_inline
@@ -23,8 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _post_init(app: Application) -> None:
-    db = Database(config.DATABASE_PATH)
-    await db.connect()
+    db = await build_database()
 
     scraper = SarkariScraper()
     app.bot_data["db"] = db

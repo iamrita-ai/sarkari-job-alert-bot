@@ -1,0 +1,4 @@
+# Optional MongoDB backend. Only needed when DATABASE_BACKEND=mongodb.
+# Install on top of requirements.txt:
+#   pip install -r requirements.txt -r requirements-mongo.txt
+motor>=3.5,<4
