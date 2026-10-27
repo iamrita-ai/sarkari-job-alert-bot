@@ -65,6 +65,14 @@ def test_mirror_detail_parsing():
     assert "wp-content" not in detail.apply_url
     assert len(detail.raw_text) <= 4000
 
+    # New v1.2 fields
+    assert detail.min_age == 20 and detail.max_age == 33
+    assert "500" in detail.fee and "250" in detail.fee
+    assert "Pay Level 6" in detail.salary
+    assert detail.image_url == (
+        "https://sarkariresult.com.cm/wp-content/uploads/2026/10/station-master-2026.jpg"
+    )
+
 
 def test_jina_cloudfront_error_is_raised_not_empty():
     blocked = (FIXTURES / "jina_blocked_sample.md").read_text(encoding="utf-8")

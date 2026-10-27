@@ -1,4 +1,4 @@
-"""Async SQLite storage (users, seen jobs, notification log)."""
+"""Async SQLite storage (users, jobs, notifications, bookmarks, reminders)."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from bot.models import JobDetail, JobSummary, UserProfile
+from bot.models import JobDetail, JobSummary, SavedJob, UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class Database:
         await self._db.execute("PRAGMA journal_mode=WAL;")
         await self._db.execute("PRAGMA foreign_keys=ON;")
         await self._create_schema()
+        await self._migrate()
         logger.info("Database ready at %s", self.path)
 
     async def close(self) -> None:
@@ -46,6 +47,7 @@ class Database:
                 category      TEXT NOT NULL,
                 qualification TEXT NOT NULL,
                 sectors       TEXT NOT NULL,
+                dob           TEXT,
                 active        INTEGER NOT NULL DEFAULT 1,
                 created_at    TEXT NOT NULL,
                 updated_at    TEXT NOT NULL
@@ -68,16 +70,40 @@ class Database:
                 PRIMARY KEY (user_id, job_id)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_jobs_pending
-                ON jobs(detail_fetched, first_seen);
+            CREATE TABLE IF NOT EXISTS saved_jobs (
+                user_id       INTEGER NOT NULL,
+                job_id        TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                url           TEXT NOT NULL,
+                last_date     TEXT,
+                saved_at      TEXT NOT NULL,
+                reminder_date TEXT,
+                reminded      INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, job_id)
+            );
 
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_jobs_pending
+                ON jobs(detail_fetched, first_seen);
+            CREATE INDEX IF NOT EXISTS idx_saved_reminders
+                ON saved_jobs(reminded, reminder_date);
             """
         )
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Add columns introduced after the first release."""
+        assert self._db is not None
+        async with self._db.execute("PRAGMA table_info(users)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "dob" not in columns:
+            await self._db.execute("ALTER TABLE users ADD COLUMN dob TEXT")
+            await self._db.commit()
+            logger.info("Migration: added users.dob column")
 
     # -------------------------------------------------------------------- meta
     async def get_meta(self, key: str, default: str | None = None) -> str | None:
@@ -114,6 +140,7 @@ class Database:
         category: str,
         qualification: str,
         sectors: list[str],
+        dob: str | None,
     ) -> UserProfile:
         assert self._db is not None
         now = _utcnow()
@@ -122,19 +149,20 @@ class Database:
         await self._db.execute(
             """
             INSERT INTO users (user_id, username, full_name, category,
-                               qualification, sectors, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                               qualification, sectors, dob, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 username=excluded.username,
                 full_name=excluded.full_name,
                 category=excluded.category,
                 qualification=excluded.qualification,
                 sectors=excluded.sectors,
+                dob=excluded.dob,
                 active=1,
                 updated_at=excluded.updated_at
             """,
             (user_id, username, full_name, category, qualification,
-             json.dumps(sectors), created, now),
+             json.dumps(sectors), dob, created, now),
         )
         await self._db.commit()
         profile = await self.get_user(user_id)
@@ -184,18 +212,6 @@ class Database:
         )
         await self._db.commit()
 
-    async def mark_bootstrap_complete(self) -> None:
-        """Consider every currently catalogued job already processed.
-
-        Prevents the first run after deployment from mass-notifying users
-        about vacancies that existed before they joined.
-        """
-        assert self._db is not None
-        await self._db.execute(
-            "UPDATE jobs SET detail_fetched = 1 WHERE detail_fetched = 0"
-        )
-        await self._db.commit()
-
     async def get_pending_jobs(
         self, limit: int, max_age_days: int = 10
     ) -> list[JobSummary]:
@@ -237,6 +253,59 @@ class Database:
             return JobDetail.from_json(row["detail_json"])
         return None
 
+    async def get_job(self, job_id: str) -> JobSummary | None:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT job_id, url, title, last_date FROM jobs WHERE job_id = ?",
+            (job_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return JobSummary(row["job_id"], row["title"], row["url"], row["last_date"])
+
+    async def list_jobs(self, limit: int = 100) -> list[JobSummary]:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT job_id, url, title, last_date FROM jobs "
+            "ORDER BY first_seen DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            JobSummary(r["job_id"], r["title"], r["url"], r["last_date"])
+            for r in rows
+        ]
+
+    async def search_jobs(self, keyword: str, limit: int = 20) -> list[JobSummary]:
+        assert self._db is not None
+        if keyword.strip():
+            query = (
+                "SELECT job_id, url, title, last_date FROM jobs "
+                "WHERE title LIKE ? ORDER BY first_seen DESC LIMIT ?"
+            )
+            params: tuple = (f"%{keyword.strip()}%", limit)
+        else:
+            query = (
+                "SELECT job_id, url, title, last_date FROM jobs "
+                "ORDER BY first_seen DESC LIMIT ?"
+            )
+            params = (limit,)
+        async with self._db.execute(query, params) as cur:
+            rows = await cur.fetchall()
+        return [
+            JobSummary(r["job_id"], r["title"], r["url"], r["last_date"])
+            for r in rows
+        ]
+
+    async def mark_bootstrap_complete(self) -> None:
+        """Consider every currently catalogued job already processed."""
+        assert self._db is not None
+        await self._db.execute(
+            "UPDATE jobs SET detail_fetched = 1 WHERE detail_fetched = 0"
+        )
+        await self._db.commit()
+
     # ------------------------------------------------------------ notifications
     async def was_notified(self, user_id: int, job_id: str) -> bool:
         assert self._db is not None
@@ -269,6 +338,84 @@ class Database:
             row = await cur.fetchone()
         return int(row["c"])
 
+    # ------------------------------------------------------- bookmarks/reminders
+    async def save_job(self, user_id: int, job: JobSummary) -> bool:
+        """Bookmark a job. Returns False if it was already saved."""
+        assert self._db is not None
+        await self._db.execute(
+            """
+            INSERT OR IGNORE INTO saved_jobs
+                (user_id, job_id, title, url, last_date, saved_at, reminded)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+            """,
+            (user_id, job.job_id, job.title, job.url, job.last_date, _utcnow()),
+        )
+        await self._db.commit()
+        async with self._db.execute(
+            "SELECT changes() AS c"
+        ) as cur:
+            return bool((await cur.fetchone())["c"])
+
+    async def unsave_job(self, user_id: int, job_id: str) -> None:
+        assert self._db is not None
+        await self._db.execute(
+            "DELETE FROM saved_jobs WHERE user_id = ? AND job_id = ?",
+            (user_id, job_id),
+        )
+        await self._db.commit()
+
+    async def is_saved(self, user_id: int, job_id: str) -> bool:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT 1 FROM saved_jobs WHERE user_id = ? AND job_id = ?",
+            (user_id, job_id),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def list_saved(self, user_id: int) -> list[SavedJob]:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT * FROM saved_jobs WHERE user_id = ? ORDER BY saved_at DESC",
+            (user_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_saved(r) for r in rows]
+
+    async def set_reminder(
+        self, user_id: int, job_id: str, reminder_iso_utc: str
+    ) -> None:
+        assert self._db is not None
+        await self._db.execute(
+            "UPDATE saved_jobs SET reminder_date = ?, reminded = 0 "
+            "WHERE user_id = ? AND job_id = ?",
+            (reminder_iso_utc, user_id, job_id),
+        )
+        await self._db.commit()
+
+    async def pending_reminders(self) -> list[SavedJob]:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT * FROM saved_jobs WHERE reminded = 0 AND reminder_date IS NOT NULL"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_saved(r) for r in rows]
+
+    async def mark_reminded(self, user_id: int, job_id: str) -> None:
+        assert self._db is not None
+        await self._db.execute(
+            "UPDATE saved_jobs SET reminded = 1 WHERE user_id = ? AND job_id = ?",
+            (user_id, job_id),
+        )
+        await self._db.commit()
+
+    async def saved_count(self, user_id: int) -> int:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT COUNT(*) AS c FROM saved_jobs WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row["c"])
+
     # ---------------------------------------------------------------- helpers
     @staticmethod
     def _row_to_profile(row: aiosqlite.Row) -> UserProfile:
@@ -279,7 +426,21 @@ class Database:
             category=row["category"],
             qualification=row["qualification"],
             sectors=json.loads(row["sectors"]),
+            dob=row["dob"] if "dob" in row.keys() else None,
             active=bool(row["active"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _row_to_saved(row: aiosqlite.Row) -> SavedJob:
+        return SavedJob(
+            user_id=row["user_id"],
+            job_id=row["job_id"],
+            title=row["title"],
+            url=row["url"],
+            last_date=row["last_date"],
+            saved_at=row["saved_at"],
+            reminder_date=row["reminder_date"],
+            reminded=bool(row["reminded"]),
         )

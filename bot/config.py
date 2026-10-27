@@ -82,3 +82,6 @@ USER_AGENT: str = os.getenv(
 
 # Bot credits shown on cards and the about page
 OWNER_HANDLES: str = "@TechnicalSerena & @Xioqui_xin"
+
+# Bundled visual assets
+START_BANNER_PATH: str = str(BASE_DIR / "assets" / "start_banner.jpg")

@@ -15,17 +15,32 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 
 ## ✨ Features
 
-- 🧑‍💼 **Full user profiles** — guided 4-step setup: name → category (UR / OBC /
-  EWS / SC / ST) → qualification → multi-select job sectors
-- 🎯 **Smart matching**
+- 🧑‍💼 **Full user profiles** — guided 5-step setup: name → **date of birth** →
+  category (UR / OBC / EWS / SC / ST) → qualification → multi-select job sectors
+- 🎯 **Smart matching on three dimensions**
   - sector keyword matching on vacancy title + URL slug
   - qualification ranking — a Graduate automatically qualifies for jobs asking
     for 12th/10th pass, but a 10th-pass user is not alerted for degree-only jobs
+  - **age matching** — the DOB is turned into an age and checked against each
+    post's min/max age with the standard GoI category relaxation (OBC/EWS +3,
+    SC/ST +5); the card explains the decision
 - 🗂️ **12 job sectors** — Railway, SSC, UPSC, Defence & Police, Banking &
   Insurance, Teaching, State Govt, PSU, Courts, Medical, Clerk/DEO, Apprentice
-- 💳 **Rich job cards** — post name, organisation, eligibility, age limit, last
-  apply date, user's category and inline buttons for **Full Details**,
-  **Apply Online** and the **notification PDF**
+- 🖼️ **Rich MarkdownV2 job cards with images** — job name (hyperlink),
+  organisation, qualification, **salary/pay**, **application fee**, age limit
+  (plus your age & relaxation), last apply date, and a coloured
+  **👉 Click Here to Fill Form** apply button; alerts are sent as photo captions
+  when the vacancy image is available, falling back to text automatically
+- 🎨 **Genuinely coloured inline buttons** — Bot API `style` (PTB 22.7+):
+  blue `primary`, green `success` (Apply / Done), red `danger` (Pause / last-date)
+- 📄 **Paginated browsing** — `/latest` and `/scrape_now` render Next / Previous
+  browsers; tap any numbered item to open its full card
+- 🔍 **Inline mode** — type `@your_bot <keyword>` in any chat, pick a result and
+  it posts the job card; an *Open in Bot* deep link reopens it inside the bot DM
+- 🔖 **Save jobs & set date reminders** — bookmark any vacancy, then get a
+  one-tap reminder (1 day / 3 days before / on last date, or a custom date at
+  9:00 AM IST); reminders survive restarts and are managed under `/saved`
+- 🏁 **Welcome banner image** on `/start`
 - 🔄 **Automatic background checks** every 30 minutes (configurable) via PTB JobQueue
 - 🛡️ **No spam** — first deployment bootstraps the existing listing silently;
   every user is notified about a job at most once
@@ -36,12 +51,12 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🚨 **Owner outage alerts** — if every source fails twice in a row, owners get
   a Telegram DM (rate-limited); `/sources` runs a live connectivity diagnostic
 - 🗄️ **SQLite storage** — zero external database required; mount a volume to persist
-- ➕ **Owner tools** — `/stats`, `/broadcast`, `/scrape_now`, `/sources` (owner-only)
+- ➕ **Owner tools** — `/stats`, `/broadcast`, `/scrape_now` (lists every
+  catalogued job in a browser), `/sources` (owner-only)
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
   bootstrap protection against mass-notifications on deploy
-- 🎨 **Colour-coded emoji buttons** (see the note on Telegram's button limits below)
-- 🧪 **Unit tests + CI** for every parser and matching rule
+- 🧪 **20 unit tests + CI** for parsers, MarkdownV2 cards, age rules and storage
 
 ---
 
@@ -59,9 +74,10 @@ PTB JobQueue (every N min)
       │    → r.jina.ai reader proxy              (last resort)
       ├─ 2. Parse listing → new JobSummary rows (jobs table)
       ├─ 3. For jobs someone subscribes to: fetch detail page
-      │        → eligibility, age limit, apply link, PDF link
-      ├─ 4. Match sector + qualification against every active user
-      └─ 5. Send formatted card, log it (notifications table)
+      │        → eligibility, age limits, fee, salary, image, apply/PDF links
+      ├─ 4. Match sector + qualification + age (category relaxation) per user
+      └─ 5. Send photo card with coloured Apply button, log notification;
+             users can bookmark the job or schedule a date reminder
 ```
 
 ---
@@ -70,24 +86,39 @@ PTB JobQueue (every N min)
 
 | Command | Purpose |
 |---|---|
-| `/start` | Create your profile (or view it if already registered) |
-| `/profile` | Show saved preferences |
-| `/edit` | Update name / category / qualification / sectors |
-| `/latest` | Fetch currently matching jobs on demand |
+| `/start` | Welcome banner, deep-link job cards, create/view profile |
+| `/profile` | Show saved preferences (incl. D.O.B and computed age) |
+| `/edit` | Update name / D.O.B / category / qualification / sectors |
+| `/latest` | Browse matching jobs with Next / Previous pagination |
+| `/saved` | Bookmarked jobs and your active date reminders |
 | `/pause` / `/resume` | Stop / restart automatic alerts |
 | `/help` / `/about` | Usage guide and bot credits |
+| `@bot <keyword>` | Inline search from any chat (enable via BotFather `/setinline`) |
 | `/stats` | 👑 Owners — user/job/alert statistics |
 | `/broadcast <text>` | 👑 Owners — message all active users |
-| `/scrape_now` | 👑 Owners — trigger a scrape cycle immediately |
+| `/scrape_now` | 👑 Owners — run a cycle, then browse all catalogued jobs |
 | `/sources` | 👑 Owners — live health check of every scraping source |
 
-### 🎨 About "coloured" inline buttons
+### 🎨 Coloured inline buttons
 
-Telegram's Bot API **does not allow custom button colours** — every inline
-button renders in the user's own Telegram theme. The standard production
-approach (used here) is colour-coded emoji prefixes so options are instantly
-scannable: 🟢🔵🟡🟣🟠 for categories, one unique emoji per job sector
-(🚆 📋 🏛️ 🛡️ 🏦 👨‍🏫 🏢 ⚙️ ⚖️ 🏥 💻 🔧), and ✅/⬜ selection states.
+Since Bot API 9.x (PTB 22.7+, Telegram clients released after 9 Feb 2026)
+inline buttons accept a **`style`** parameter:
+
+- `primary` → **blue** (navigation, details)
+- `success` → **green** (Apply Online, Save Profile, Resume)
+- `danger` → **red** (Pause, last-date actions)
+
+Older Telegram clients simply render the same buttons without colour, so
+nothing breaks. Colour-coded emoji (🟢🔵🟡🟣🟠 categories, one unique emoji per
+sector, ✅/⬜ selection states) are kept alongside for extra scannability.
+
+### 🔍 Inline mode & deep links
+
+Enable inline mode for the bot via **@BotFather → /setinline** (pick a placeholder
+like `Search government jobs…`). Users can then type `@your_bot railway` in any
+chat, choose a result, and the formatted job card is posted there. Every result
+also carries an *Open in Bot* button using a `/start` deep-link payload, so the
+same card opens inside the bot DM with Save / Reminder actions.
 
 ---
 
@@ -97,18 +128,24 @@ scannable: 🟢🔵🟡🟣🟠 for categories, one unique emoji per job sector
 sarkari-job-alert-bot/
 ├── bot/
 │   ├── config.py       # all settings from environment variables
-│   ├── constants.py    # categories, qualification levels, sector keywords
-│   ├── models.py       # JobSummary, JobDetail, UserProfile dataclasses
-│   ├── db.py           # async SQLite layer (users / jobs / notifications)
-│   ├── scraper.py      # httpx fetcher + HTML/Markdown parsers (one file to fix if the site changes)
-│   ├── matcher.py      # sector & qualification matching
-│   ├── cards.py        # Telegram message cards
-│   ├── keyboards.py    # inline keyboards
-│   ├── handlers.py     # commands, profile conversation, menus, admin tools
-│   ├── scheduler.py    # periodic scrape → match → notify pipeline
+│   ├── constants.py    # categories, qualifications, sectors, age relaxation
+│   ├── models.py       # JobSummary, JobDetail, UserProfile, SavedJob dataclasses
+│   ├── db.py           # async SQLite (users / jobs / notifications / bookmarks)
+│   ├── scraper.py      # httpx fetcher + mirror/original parsers (one file to fix)
+│   ├── matcher.py      # sector, qualification & age (with relaxation) matching
+│   ├── cards.py        # MarkdownV2 cards + 1024-char photo captions
+│   ├── keyboards.py    # coloured inline keyboards (primary/success/danger)
+│   ├── browser.py      # paginated Next/Previous job browsers
+│   ├── inline.py       # inline-mode search + deep-link cards
+│   ├── reminders.py    # save jobs, date reminders, JobQueue re-arming
+│   ├── handlers.py     # commands, 5-step profile conversation, menus, admin
+│   ├── scheduler.py    # periodic scrape → match → photo/text notify pipeline
 │   ├── health.py       # /health HTTP server
+│   ├── utils.py        # MarkdownV2 escaping, DOB/age maths, deep-link codec
 │   └── main.py         # entry point
-├── tests/              # offline parser & matcher tests (pytest)
+├── assets/
+│   └── start_banner.jpg
+├── tests/              # 20 offline tests (parsers, cards, age rules, storage)
 ├── scripts/github_push.sh
 ├── Dockerfile
 ├── docker-compose.yml
@@ -117,6 +154,15 @@ sarkari-job-alert-bot/
 ├── .env.example
 └── LICENSE
 ```
+
+### 📦 Release notes
+
+- **v1.2** — DOB + age matching with category relaxation, coloured `style`
+  buttons, MarkdownV2 cards with salary/fee/image, inline mode, paginated
+  browsers, save & reminder system, welcome banner, PTB v22.8
+- **v1.1** — multi-source scraper (mirror-first), owner outage alerts,
+  `/sources`, global error handler
+- **v1.0** — initial PTB bot, profile onboarding, sector/qualification matching
 
 ---
 

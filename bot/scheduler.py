@@ -9,7 +9,8 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
 from bot import config, matcher
-from bot.cards import job_card
+from bot.cards import job_card, photo_caption
+from bot.keyboards import job_action_keyboard, job_detail_keyboard
 from bot.models import JobSummary, UserProfile
 from bot.scraper import ScraperError
 
@@ -91,25 +92,60 @@ class JobMonitor:
             for user in users:
                 if not matcher.title_matches(user, job):
                     continue
-                if detail is not None and not matcher.qualification_matches(user, detail):
-                    continue
+                if detail is not None:
+                    if not matcher.qualification_matches(user, detail):
+                        continue
+                    age_ok, age_info = matcher.age_matches(user, detail)
+                    if not age_ok:
+                        logger.info(
+                            "Skipping %s for %s: %s",
+                            job.job_id, user.user_id, age_info["reason"],
+                        )
+                        continue
+                else:
+                    age_info = None
                 if await self.db.was_notified(user.user_id, job.job_id):
                     continue
-                if await self._notify(user, job, detail):
+                if await self._notify(user, job, detail, age_info):
                     sent += 1
-                await asyncio.sleep(0.06)  # stay well under Telegram's 30 msg/s
+                await asyncio.sleep(0.06)  # stay under Telegram's 30 msg/s
         logger.info("Cycle complete: %d pending jobs, %d alerts sent", len(pending), sent)
 
-    async def _notify(self, user: UserProfile, job: JobSummary, detail) -> bool:  # noqa: ANN001
-        text, keyboard = job_card(job, detail, user)
+    async def _notify(self, user: UserProfile, job: JobSummary,
+                      detail, age_info) -> bool:  # noqa: ANN001
+        keyboard = (
+            job_detail_keyboard(job, detail) if detail is not None
+            else job_action_keyboard(job)
+        )
         try:
-            await self.bot.send_message(
-                chat_id=user.user_id,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard,
-                disable_web_page_preview=True,
-            )
+            if detail is not None and detail.image_url:
+                caption = photo_caption(job, detail, user, age_info)
+                try:
+                    await self.bot.send_photo(
+                        chat_id=user.user_id,
+                        photo=detail.image_url,
+                        caption=caption,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=keyboard,
+                    )
+                except TelegramError:
+                    # Unsupported/dead image URL -> degrade to a text card
+                    logger.warning("Photo send failed for %s, using text card", job.job_id)
+                    await self.bot.send_message(
+                        chat_id=user.user_id,
+                        text=job_card(job, detail, user, age_info),
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True,
+                    )
+            else:
+                await self.bot.send_message(
+                    chat_id=user.user_id,
+                    text=job_card(job, detail, user, age_info),
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                )
         except Forbidden:
             logger.info("User %s blocked the bot - pausing their alerts", user.user_id)
             await self.db.set_active(user.user_id, False)
@@ -117,7 +153,7 @@ class JobMonitor:
         except RetryAfter as exc:
             logger.warning("Rate limited, sleeping %ss", exc.retry_after)
             await asyncio.sleep(exc.retry_after + 1)
-            return await self._notify(user, job, detail)
+            return await self._notify(user, job, detail, age_info)
         except TelegramError:
             logger.exception("Failed to send alert to %s", user.user_id)
             return False
@@ -140,13 +176,19 @@ class JobMonitor:
             return
         self.app.bot_data["last_owner_failure_alert"] = now
         text = (
-            "🚨 <b>Scraper alert</b>\n"
-            f"All data sources failed {failures} time(s) in a row.\n"
-            f"<code>{error[:600]}</code>\n"
-            "Use /sources to diagnose. The bot keeps retrying automatically."
+            "🚨 *Scraper alert*\n"
+            f"All data sources failed {failures} time\\(s\\) in a row\\.\n"
+            f"`{_md(error)[:600]}`\n"
+            "Use /sources to diagnose\\. The bot keeps retrying automatically\\."
         )
         for chat_id in owner_ids:
             try:
-                await self.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+                await self.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
             except TelegramError:
                 logger.exception("Could not deliver owner alert to %s", chat_id)
+
+
+def _md(text: str) -> str:
+    from bot.utils import md_escape
+
+    return md_escape(text)

@@ -177,3 +177,16 @@ SECTOR_EMOJI: dict[str, str] = {
 CATEGORY_EMOJI: dict[str, str] = {
     "UR": "🟢", "OBC": "🔵", "EWS": "🟡", "SC": "🟣", "ST": "🟠",
 }
+
+# Standard GoI upper-age relaxation (years) added to the published max age.
+# UR gets none; OBC/EWS get 3; SC/ST get 5.
+CATEGORY_AGE_RELAXATION: dict[str, int] = {
+    "UR": 0, "OBC": 3, "EWS": 3, "SC": 5, "ST": 5,
+}
+
+# Pagination for in-chat job browsers
+PAGE_SIZE = 6
+
+# Conversation states shared by handlers (S_ prefix to avoid clashing with the
+# SECTORS list / CATEGORY_MAP names defined above)
+S_NAME, S_DOB, S_CATEGORY, S_QUALIFICATION, S_SECTORS, S_REMINDER_DATE = range(6)

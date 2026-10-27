@@ -10,6 +10,8 @@ from bot import config
 from bot.db import Database
 from bot.handlers import register_handlers
 from bot.health import start_health_server
+from bot.inline import register_inline
+from bot.reminders import register_reminders, schedule_all_pending
 from bot.scheduler import JobMonitor
 from bot.scraper import SarkariScraper
 
@@ -29,6 +31,12 @@ async def _post_init(app: Application) -> None:
     app.bot_data["scraper"] = scraper
     app.bot_data["owner_chat_ids"] = set()
     app.bot_data["last_owner_failure_alert"] = None
+    app.bot_data["browsers"] = {}
+    app.bot_data["saved_browsers"] = {}
+
+    me = await app.bot.get_me()
+    app.bot_data["bot_username"] = me.username
+    logger.info("Running as @%s", me.username)
 
     monitor = JobMonitor(app)
     app.bot_data["monitor"] = monitor
@@ -39,11 +47,15 @@ async def _post_init(app: Application) -> None:
         name="sarkari-job-monitor",
     )
 
+    # Re-arm bookmark reminders that were scheduled before this restart
+    await schedule_all_pending(app)
+
     await app.bot.set_my_commands([
         BotCommand("start", "Create / view your job profile"),
         BotCommand("profile", "Show your saved preferences"),
         BotCommand("edit", "Update your profile & preferences"),
-        BotCommand("latest", "Fetch matching jobs now"),
+        BotCommand("latest", "Browse matching jobs (Next / Previous)"),
+        BotCommand("saved", "Your bookmarked jobs & reminders"),
         BotCommand("pause", "Pause job alerts"),
         BotCommand("resume", "Resume job alerts"),
         BotCommand("help", "Help & usage"),
@@ -80,6 +92,8 @@ def main() -> None:
         .build()
     )
     register_handlers(app)
+    register_reminders(app)
+    register_inline(app)
     logger.info(
         "Sarkari Job Alert Bot starting (check every %.0f min, owners: %s)",
         config.CHECK_INTERVAL_MINUTES,

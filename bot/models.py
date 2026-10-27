@@ -25,14 +25,22 @@ class JobDetail:
     organization: str | None = None
     apply_url: str | None = None
     notification_pdf: str | None = None
+    image_url: str | None = None
+    salary: str = ""
+    fee: str = ""
+    min_age: int | None = None
+    max_age: int | None = None
     raw_text: str = ""
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), ensure_ascii=False)
 
     @classmethod
-    def from_json(cls, payload: str) -> "JobDetail":
-        return cls(**json.loads(payload))
+    def from_json(cls, payload: str) -> JobDetail:
+        data = json.loads(payload)
+        # Forward-compatible: older rows may lack newly added fields
+        allowed = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in allowed})
 
 
 @dataclasses.dataclass(slots=True)
@@ -45,6 +53,7 @@ class UserProfile:
     category: str
     qualification: str
     sectors: list[str]
+    dob: str | None = None                 # stored as DD/MM/YYYY
     active: bool = True
     created_at: str = ""
     updated_at: str = ""
@@ -63,3 +72,17 @@ class UserProfile:
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(slots=True)
+class SavedJob:
+    """A bookmarked vacancy, optionally with a reminder."""
+
+    user_id: int
+    job_id: str
+    title: str
+    url: str
+    last_date: str | None
+    saved_at: str
+    reminder_date: str | None = None      # ISO-8601 UTC instant
+    reminded: bool = False

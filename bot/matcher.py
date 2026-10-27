@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import re
 
-from bot.constants import QUALIFICATIONS, SECTOR_MAP
+from bot.constants import CATEGORY_AGE_RELAXATION, QUALIFICATIONS, SECTOR_MAP
 from bot.models import JobDetail, JobSummary, UserProfile
+from bot.utils import calculate_age
 
 
 def _normalize(text: str) -> str:
@@ -50,3 +51,36 @@ def qualification_matches(profile: UserProfile, detail: JobDetail) -> bool:
     if not required:
         return True
     return profile.qual_rank >= min(required)
+
+
+def age_matches(profile: UserProfile, detail: JobDetail) -> tuple[bool, dict]:
+    """Check the user's age against min/max with category relaxation.
+
+    Returns ``(eligible, info)`` where info carries the numbers used so the
+    card can explain the decision. Missing data never blocks an alert.
+    """
+    info = {
+        "user_age": calculate_age(profile.dob),
+        "min_age": detail.min_age,
+        "max_age": detail.max_age,
+        "relaxation": CATEGORY_AGE_RELAXATION.get(profile.category, 0),
+        "effective_max": None,
+        "reason": "",
+    }
+    if info["user_age"] is None or (detail.min_age is None and detail.max_age is None):
+        info["reason"] = "age data unavailable"
+        return True, info
+
+    effective_max = None
+    if detail.max_age is not None:
+        effective_max = detail.max_age + info["relaxation"]
+        info["effective_max"] = effective_max
+
+    if detail.min_age is not None and info["user_age"] < detail.min_age:
+        info["reason"] = "below minimum age"
+        return False, info
+    if effective_max is not None and info["user_age"] > effective_max:
+        info["reason"] = "above maximum age (incl. relaxation)"
+        return False, info
+    info["reason"] = "within age window"
+    return True, info

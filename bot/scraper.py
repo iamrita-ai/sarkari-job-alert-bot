@@ -237,6 +237,79 @@ def _mirror_apply_and_pdf(soup: BeautifulSoup) -> tuple[str | None, str | None]:
     return apply_url, pdf_url
 
 
+_AGE_NUM_RE = re.compile(r"\d+")
+_HEADING_RE = re.compile(r"[A-Z][A-Za-z ]{4,}:?\s*$")
+
+
+def _age_ints(lines: list[str], index: int) -> list[int]:
+    """Plausible age numbers (14-70) on a label line and the line after it."""
+    window = " ".join(lines[index:index + 2])
+    return [int(n) for n in _AGE_NUM_RE.findall(window) if 14 <= int(n) <= 70]
+
+
+def _extract_age_limits(lines: list[str]) -> tuple[int | None, int | None]:
+    min_age = max_age = None
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if min_age is None and "minimum age" in low:
+            ages = _age_ints(lines, i)
+            if ages:
+                min_age = ages[0]
+        if max_age is None and "maximum age" in low:
+            ages = _age_ints(lines, i)
+            if ages:
+                max_age = ages[-1]
+    # Prose fallback, e.g. "minimum age limit is 18 – 21 years"
+    if min_age is None or max_age is None:
+        joined = " ".join(lines)
+        if match := re.search(
+            r"minimum age[^\d]{0,30}(\d{2})\s*[–\-to]+\s*(\d{2})\s*years",
+            joined, re.IGNORECASE,
+        ):
+            min_age = min_age or int(match.group(1))
+            max_age = max_age or int(match.group(2))
+    return min_age, max_age
+
+
+def _extract_fee(lines: list[str]) -> str:
+    start = _find_line(lines, r"application fee")
+    if start < 0:
+        return ""
+    bits: list[str] = []
+    for line in lines[start + 1: start + 12]:
+        if re.search(
+            r"age limit|total post|vacancy details|important dates|salary|pay scale",
+            line, re.I,
+        ):
+            break
+        if re.search(r"₹|rs\.?\s*\d", line, re.I):
+            bits.append(_clean(line))
+        if len(bits) == 3:
+            break
+    return " | ".join(bits)[:220]
+
+
+def _extract_salary(lines: list[str]) -> str:
+    pattern = re.compile(
+        r"salary|pay (scale|level|matrix|band)|grade pay|in.hand salary", re.I
+    )
+    for i, line in enumerate(lines):
+        if not pattern.search(line):
+            continue
+        # A heading like "Salary / Pay Scale" carries no value - take next line
+        if re.search(r"₹|rs\.?\s*\d|\d{2,}", line):
+            return _clean(line)[:220]
+        if i + 1 < len(lines):
+            return _clean(lines[i + 1])[:220]
+    return ""
+
+
+def _extract_og_image(soup: BeautifulSoup) -> str | None:
+    meta = soup.find("meta", attrs={"property": "og:image"})
+    content = (meta.get("content") if meta else "") or ""
+    return content.replace("http://", "https://") or None
+
+
 def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "svg"]):
@@ -275,6 +348,13 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
         if i >= 0:
             age_bits.append(f"{lines[i].rstrip(': ')} {_line_after(lines, i)}")
     age_limit = " | ".join(_clean(b) for b in age_bits)[:220]
+    min_age, max_age = _extract_age_limits(lines)
+    if not age_limit and (min_age or max_age):
+        age_limit = f"Minimum Age {min_age or '—'} Years | Maximum Age {max_age or '—'} Years"
+
+    fee = _extract_fee(lines)
+    salary = _extract_salary(lines)
+    image_url = _extract_og_image(soup)
 
     # Eligibility: first qualification sentence after the "Eligibility Criteria"
     # heading; fall back to any qualification keyword line in the page.
@@ -305,6 +385,11 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
         organization=organization or None,
         apply_url=apply_url,
         notification_pdf=pdf_url,
+        image_url=image_url,
+        salary=salary,
+        fee=fee,
+        min_age=min_age,
+        max_age=max_age,
         raw_text=text[:4000],
     )
 

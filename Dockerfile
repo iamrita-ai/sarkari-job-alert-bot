@@ -18,8 +18,9 @@ RUN python -m pip install --upgrade pip \
        --retries 5 --timeout 120 --prefer-binary \
        -r requirements.txt
 
-# Copy application code
+# Copy application code and bundled assets (start banner image)
 COPY bot ./bot
+COPY assets ./assets
 
 # Non-root user + writable data directory for the SQLite database
 RUN mkdir -p /app/data \

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -17,25 +18,34 @@ from telegram.ext import (
 )
 
 from bot import config, matcher
+from bot.browser import open_browser
 from bot.cards import (
-    ABOUT_TEXT,
-    HELP_TEXT,
-    esc,
-    latest_jobs_card,
+    about_text,
+    help_text,
     profile_card,
+    welcome_caption,
+)
+from bot.constants import (
+    S_CATEGORY,
+    CATEGORY_MAP,
+    S_DOB,
+    S_NAME,
+    S_QUALIFICATION,
+    QUAL_MAP,
+    S_SECTORS,
+    SECTOR_KEYS,
 )
 from bot.keyboards import (
     category_keyboard,
+    get_started_keyboard,
     main_menu_keyboard,
     qualification_keyboard,
     sectors_keyboard,
 )
-from bot.constants import CATEGORY_MAP, QUAL_MAP, SECTOR_KEYS
 from bot.scraper import ScraperError
+from bot.utils import decode_job_id, md_escape, parse_dob
 
 logger = logging.getLogger(__name__)
-
-NAME, CATEGORY, QUALIFICATION, SECTORS = range(4)
 
 
 # --------------------------------------------------------------------- utils
@@ -59,28 +69,80 @@ async def track_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.application.bot_data.setdefault("owner_chat_ids", set()).add(user.id)
 
 
+async def _send_banner(message, caption: str, markup=None) -> None:
+    banner = Path(config.START_BANNER_PATH)
+    if banner.exists():
+        with banner.open("rb") as photo:
+            await message.reply_photo(
+                photo=photo, caption=caption,
+                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=markup,
+            )
+    else:  # graceful degradation if the asset is missing
+        await message.reply_markdown_v2(caption, reply_markup=markup)
+
+
+# ------------------------------------------------------------- deep links
+async def _show_deep_linked_job(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                payload: str) -> bool:
+    if not payload.startswith("j"):
+        return False
+    job_id = decode_job_id(payload[1:])
+    if not job_id:
+        return False
+    job = await _db(context).get_job(job_id)
+    if job is None:
+        return False
+    db = _db(context)
+    profile = await db.get_user(update.effective_user.id)
+    detail = await db.get_job_detail(job_id)
+    age_info = None
+    if profile and detail:
+        _, age_info = matcher.age_matches(profile, detail)
+    from bot.cards import job_card
+    from bot.keyboards import job_detail_keyboard
+    from bot.reminders import _guest
+    target = profile or _guest()
+    await update.message.reply_markdown_v2(
+        job_card(job, detail, target, age_info),
+        reply_markup=job_detail_keyboard(job, detail, await db.is_saved(target.user_id, job_id) if profile else False),
+        disable_web_page_preview=True,
+    )
+    if not profile:
+        await update.message.reply_markdown_v2(
+            "👆 That's how every alert looks\\. Send /start to create your profile "
+            "and get personalised job matches\\."
+        )
+    return True
+
+
 # ------------------------------------------------------------- onboarding
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     db = _db(context)
-    tg_user = update.effective_user
-    profile = await db.get_user(tg_user.id)
+    if context.args:
+        if await _show_deep_linked_job(update, context, context.args[0]):
+            return ConversationHandler.END
 
+    profile = await db.get_user(update.effective_user.id)
     if profile:
-        await update.message.reply_html(
-            f"Welcome back, {esc(profile.full_name)}! 👋\n\n{profile_card(profile)}",
-            reply_markup=main_menu_keyboard(profile.active),
+        await _send_banner(
+            update.message,
+            f"Welcome back, {md_escape(profile.full_name)} 👋\n\n" + profile_card(profile),
+            main_menu_keyboard(profile.active),
         )
         return ConversationHandler.END
 
+    await _send_banner(update.message, welcome_caption(), get_started_keyboard())
+    return ConversationHandler.END
+
+
+async def begin_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
     context.user_data["draft"] = {"sectors": set()}
-    await update.message.reply_html(
-        "👋 Welcome to <b>Sarkari Job Alert Bot</b>!\n\n"
-        "I continuously watch SarkariResult.com and instantly message you "
-        "whenever a government job matches your profile.\n\n"
-        "Let's build your profile in 4 quick steps.\n\n"
-        "Step 1️⃣ — Type your <b>full name</b> now:"
+    await query.message.reply_markdown_v2(
+        "Step 1️⃣/5 — Type your *full name* now:"
     )
-    return NAME
+    return S_NAME
 
 
 async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -89,15 +151,16 @@ async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if profile:
         draft.update(
             full_name=profile.full_name,
+            dob=profile.dob,
             category=profile.category,
             qualification=profile.qualification,
         )
     context.user_data["draft"] = draft
-    current = f" Current name: <b>{esc(profile.full_name)}</b>." if profile else ""
-    await update.message.reply_html(
-        f"✏️ Updating your profile.{current}\n\nStep 1️⃣ — Type your <b>full name</b>:"
+    current = f" Current name: *{md_escape(profile.full_name)}*\\." if profile else ""
+    await update.message.reply_markdown_v2(
+        f"✏️ Updating your profile\\.{current}\n\nStep 1️⃣/5 — Type your *full name*:"
     )
-    return NAME
+    return S_NAME
 
 
 async def name_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -106,14 +169,32 @@ async def name_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.message.reply_text(
             "⚠️ Please send a valid name between 2 and 64 characters."
         )
-        return NAME
+        return S_NAME
     context.user_data["draft"]["full_name"] = name
-    await update.message.reply_html(
-        f"Nice to meet you, <b>{esc(name)}</b>! 🙂\n\n"
-        "Step 2️⃣ — Choose your <b>reservation category</b>:",
+    await update.message.reply_markdown_v2(
+        f"Thanks, *{md_escape(name)}* 🙂\n\n"
+        "Step 2️⃣/5 — Type your *date of birth* as `DD/MM/YYYY` "
+        "\\(used to check age limits with your category relaxation\\):"
+    )
+    return S_DOB
+
+
+async def dob_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    dob = parse_dob(update.message.text)
+    if dob is None:
+        await update.message.reply_text(
+            "⚠️ Invalid date. Please send a real date as DD/MM/YYYY, e.g. 15/08/2000."
+        )
+        return S_DOB
+    from bot.utils import dob_to_storage, calculate_age
+    stored = dob_to_storage(dob)
+    context.user_data["draft"]["dob"] = stored
+    await update.message.reply_markdown_v2(
+        f"🎂 Recorded: `{stored}` \\(age {calculate_age(stored)} Yrs\\)\n\n"
+        "Step 3️⃣/5 — Choose your *reservation category*:",
         reply_markup=category_keyboard(),
     )
-    return CATEGORY
+    return S_CATEGORY
 
 
 async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -121,16 +202,16 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     key = query.data.split(":", 1)[1]
     if key not in CATEGORY_MAP:
         await query.answer()
-        return CATEGORY
+        return S_CATEGORY
     context.user_data["draft"]["category"] = key
     await query.answer()
     await query.edit_message_text(
-        "Step 3️⃣ — Choose your <b>highest qualification</b> "
-        "(you'll automatically qualify for jobs asking for a lower one):",
-        parse_mode=ParseMode.HTML,
+        "Step 4️⃣/5 — Choose your *highest qualification* "
+        "\\(you automatically qualify for jobs asking for a lower one\\):",
+        parse_mode=ParseMode.MARKDOWN_V2,
         reply_markup=qualification_keyboard(),
     )
-    return QUALIFICATION
+    return S_QUALIFICATION
 
 
 async def qualification_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -138,16 +219,16 @@ async def qualification_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
     key = query.data.split(":", 1)[1]
     if key not in QUAL_MAP:
         await query.answer()
-        return QUALIFICATION
+        return S_QUALIFICATION
     context.user_data["draft"]["qualification"] = key
     await query.answer()
     await query.edit_message_text(
-        "Step 4️⃣ — Tick the <b>job sectors</b> you want alerts for "
-        "(you can select several), then press <b>Done</b>:",
-        parse_mode=ParseMode.HTML,
+        "Step 5️⃣/5 — Tick the *job sectors* you want alerts for "
+        "\\(select several\\), then press *Done*:",
+        parse_mode=ParseMode.MARKDOWN_V2,
         reply_markup=sectors_keyboard(context.user_data["draft"].get("sectors", set())),
     )
-    return SECTORS
+    return S_SECTORS
 
 
 async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -159,15 +240,15 @@ async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if key != "done":
         if key not in SECTOR_KEYS:
             await query.answer()
-            return SECTORS
+            return S_SECTORS
         selected.symmetric_difference_update({key})
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=sectors_keyboard(selected))
-        return SECTORS
+        return S_SECTORS
 
     if not selected:
         await query.answer("Please pick at least one sector 🙂", show_alert=True)
-        return SECTORS
+        return S_SECTORS
 
     tg_user = update.effective_user
     profile = await _db(context).upsert_user(
@@ -177,16 +258,19 @@ async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         category=draft["category"],
         qualification=draft["qualification"],
         sectors=sorted(selected),
+        dob=draft.get("dob"),
     )
     context.user_data.pop("draft", None)
     await query.answer("Profile saved ✅")
     await query.edit_message_text(
-        f"✅ <b>Profile saved successfully!</b>\n\n{profile_card(profile)}",
-        parse_mode=ParseMode.HTML,
+        f"✅ *Profile saved successfully\\!*\n\n{profile_card(profile)}",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        disable_web_page_preview=True,
     )
     await context.bot.send_message(
         chat_id=tg_user.id,
-        text="You're all set! New matching jobs will arrive here automatically. 🔔",
+        text="You're all set\\! New matching jobs arrive here automatically 🔔",
+        parse_mode=ParseMode.MARKDOWN_V2,
         reply_markup=main_menu_keyboard(True),
     )
     return ConversationHandler.END
@@ -206,29 +290,28 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not profile:
         await update.message.reply_text("You don't have a profile yet. Send /start to create one.")
         return
-    await update.message.reply_html(
+    await update.message.reply_markdown_v2(
         profile_card(profile), reply_markup=main_menu_keyboard(profile.active)
     )
 
 
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _db(context).set_active(update.effective_user.id, False)
-    await update.message.reply_text(
-        "⏸ Alerts paused. Send /resume whenever you want them back."
-    )
+    await update.message.reply_markdown_v2("⏸ Alerts paused\\. Send /resume to turn them back on\\.")
 
 
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _db(context).set_active(update.effective_user.id, True)
-    await update.message.reply_text("▶️ Alerts resumed — stay tuned!")
+    await update.message.reply_markdown_v2("▶️ Alerts resumed — stay tuned\\!")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_html(HELP_TEXT)
+    bot_username = context.application.bot_data.get("bot_username", "your_bot")
+    await update.message.reply_markdown_v2(help_text().replace("@<bot_username>", f"@{bot_username}"))
 
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_html(ABOUT_TEXT, disable_web_page_preview=True)
+    await update.message.reply_markdown_v2(about_text(), disable_web_page_preview=True)
 
 
 async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -244,20 +327,19 @@ async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except ScraperError:
         logger.exception("Latest-jobs fetch failed")
         await status.edit_text(
-            "⚠️ Couldn't reach Sarkari Result right now. Please try again in a few minutes."
+            "⚠️ Couldn't reach the job sources right now. Please try again in a few minutes."
         )
         return
     matched = [job for job in jobs if matcher.title_matches(profile, job)]
-    await status.edit_text(
-        latest_jobs_card(matched, profile),
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True,
+    await status.edit_text(f"✅ {len(matched)} matching jobs — use Next / Previous to browse.")
+    await open_browser(
+        update, context, profile.user_id, matched,
+        kind="latest", heading="Latest Matching Jobs",
     )
 
 
 # ------------------------------------------------------------------ menu taps
 async def menu_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Conversation entry point triggered by the 'Edit Profile' inline button."""
     query = update.callback_query
     await query.answer()
     profile = await _db(context).get_user(query.from_user.id)
@@ -265,15 +347,16 @@ async def menu_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if profile:
         draft.update(
             full_name=profile.full_name,
+            dob=profile.dob,
             category=profile.category,
             qualification=profile.qualification,
         )
     context.user_data["draft"] = draft
-    current = f" Current name: <b>{esc(profile.full_name)}</b>." if profile else ""
-    await query.message.reply_html(
-        f"✏️ Updating your profile.{current}\n\nStep 1️⃣ — Type your <b>full name</b>:"
+    current = f" Current name: *{md_escape(profile.full_name)}*\\." if profile else ""
+    await query.message.reply_markdown_v2(
+        f"✏️ Updating your profile\\.{current}\n\nStep 1️⃣/5 — Type your *full name*:"
     )
-    return NAME
+    return S_NAME
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -286,10 +369,16 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     profile = await db.get_user(query.from_user.id)
 
     if action == "help":
-        await query.edit_message_text(HELP_TEXT, parse_mode=ParseMode.HTML)
+        bot_username = context.application.bot_data.get("bot_username", "your_bot")
+        await query.edit_message_text(
+            help_text().replace("@<bot_username>", f"@{bot_username}"),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
     elif action == "about":
-        await query.edit_message_text(ABOUT_TEXT, parse_mode=ParseMode.HTML,
-                                     disable_web_page_preview=True)
+        await query.edit_message_text(
+            about_text(), parse_mode=ParseMode.MARKDOWN_V2,
+            disable_web_page_preview=True,
+        )
     elif action in {"pause", "resume"}:
         if not profile:
             await query.message.reply_text("Send /start to create your profile first.")
@@ -298,12 +387,16 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await db.set_active(query.from_user.id, active)
         profile = await db.get_user(query.from_user.id)
         await query.edit_message_text(
-            profile_card(profile), parse_mode=ParseMode.HTML,
+            profile_card(profile), parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=main_menu_keyboard(active),
+            disable_web_page_preview=True,
         )
-        await query.message.reply_text(
-            "▶️ Alerts resumed." if active else "⏸ Alerts paused."
+        await query.message.reply_markdown_v2(
+            "▶️ Alerts resumed\\." if active else "⏸ Alerts paused\\."
         )
+    elif action == "saved":
+        from bot.reminders import saved_command
+        await saved_command(update, context)
     elif action == "latest":
         if not profile:
             await query.message.reply_text("Send /start to create your profile first.")
@@ -312,21 +405,19 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         try:
             jobs = await _scraper(context).fetch_latest_jobs()
         except ScraperError:
-            await status.edit_text(
-                "⚠️ Couldn't reach Sarkari Result right now. Try again shortly."
-            )
+            await status.edit_text("⚠️ Couldn't reach the job sources. Try again shortly.")
             return
         matched = [job for job in jobs if matcher.title_matches(profile, job)]
-        await status.edit_text(
-            latest_jobs_card(matched, profile),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
+        await status.edit_text(f"✅ {len(matched)} matching jobs — use Next / Previous.")
+        await open_browser(
+            update, context, profile.user_id, matched,
+            kind="latest", heading="Latest Matching Jobs",
         )
 
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get("draft"):
-        return  # conversation handler owns this input
+    if context.user_data.get("draft") or context.user_data.get("reminder_job_id"):
+        return  # a conversation handler owns this input
     await update.message.reply_text(
         "Use /start to set up your profile or /help to see everything I can do."
     )
@@ -340,13 +431,15 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     db = _db(context)
     users = await db.all_users()
     active = sum(1 for u in users if u.active)
-    await update.message.reply_html(
-        "📊 <b>Bot Statistics</b>\n"
-        f"• Total users: <b>{len(users)}</b>\n"
-        f"• Active alerts: <b>{active}</b>\n"
-        f"• Jobs catalogued: <b>{await db.job_count()}</b>\n"
-        f"• Notifications sent: <b>{await db.notification_count()}</b>"
+    text = (
+        "📊 *Bot Statistics*\n"
+        f"• Total users: *{len(users)}*\n"
+        f"• Active alerts: *{active}*\n"
+        f"• Jobs catalogued: *{await db.job_count()}*\n"
+        f"• Notifications sent: *{await db.notification_count()}*\n"
+        f"• Scraper source: *{md_escape(_scraper(context).status.get('last_success_source') or 'none')}*"
     )
+    await update.message.reply_markdown_v2(text)
 
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -375,10 +468,19 @@ async def admin_scrape_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not _is_owner(update):
         await update.message.reply_text("🚫 Owner-only command.")
         return
-    await update.message.reply_text("🔄 Running a scrape cycle now…")
+    status = await update.message.reply_text("🔄 Running a scrape cycle now…")
     monitor = context.application.bot_data["monitor"]
     await monitor.periodic_check()
-    await update.message.reply_text("✅ Scrape cycle complete.")
+    db = _db(context)
+    all_jobs = await db.list_jobs(limit=100)
+    await status.edit_text(
+        f"✅ Cycle complete\\. {len(all_jobs)} jobs currently catalogued — browse them below:",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    await open_browser(
+        update, context, update.effective_user.id, all_jobs,
+        kind="all", heading="All Catalogued Jobs",
+    )
 
 
 async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -387,19 +489,19 @@ async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     status = await update.message.reply_text("🩺 Probing every data source…")
     report = await _scraper(context).source_healthcheck()
-    lines = ["🩺 <b>Data-source health</b>", "━━━━━━━━━━━━━━━━━━"]
+    lines = ["🩺 *Data\\-source health*", "━━━━━━━━━━━━━━━━━━"]
     for entry in report:
         if entry["ok"]:
-            lines.append(f"✅ <b>{entry['source']}</b> — {entry['jobs']} jobs")
+            lines.append(f"✅ *{md_escape(entry['source'])}* — {entry['jobs']} jobs")
         else:
-            lines.append(f"❌ <b>{entry['source']}</b> — {esc(entry['error'])}")
+            lines.append(f"❌ *{md_escape(entry['source'])}* — {md_escape(entry['error'])}")
     scraper_status = _scraper(context).status
     lines.append("━━━━━━━━━━━━━━━━━━")
     lines.append(
-        f"Last success: {esc(scraper_status.get('last_success_at') or 'never')} "
-        f"via {esc(scraper_status.get('last_success_source') or '—')}"
+        f"Last success: {md_escape(scraper_status.get('last_success_at') or 'never')} "
+        f"via {md_escape(scraper_status.get('last_success_source') or '—')}"
     )
-    await status.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    await status.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,7 +512,7 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
             await update.effective_message.reply_text(
                 "⚠️ Something went wrong on my side. Please try again in a moment."
             )
-        except Exception:  # noqa: BLE001 - never raise out of the error handler
+        except Exception:  # noqa: BLE001
             logger.exception("Failed to deliver the generic error message")
 
 
@@ -421,12 +523,14 @@ def register_handlers(app: Application) -> None:
             CommandHandler("start", start),
             CommandHandler("edit", edit_profile),
             CallbackQueryHandler(menu_edit_entry, pattern="^menu:edit$"),
+            CallbackQueryHandler(begin_conversation, pattern="^start:begin$"),
         ],
         states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name_received)],
-            CATEGORY: [CallbackQueryHandler(category_chosen, pattern="^cat:")],
-            QUALIFICATION: [CallbackQueryHandler(qualification_chosen, pattern="^qual:")],
-            SECTORS: [CallbackQueryHandler(sector_chosen, pattern="^sec:")],
+            S_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name_received)],
+            S_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, dob_received)],
+            S_CATEGORY: [CallbackQueryHandler(category_chosen, pattern="^cat:")],
+            S_QUALIFICATION: [CallbackQueryHandler(qualification_chosen, pattern="^qual:")],
+            S_SECTORS: [CallbackQueryHandler(sector_chosen, pattern="^sec:")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
@@ -445,7 +549,6 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("scrape_now", admin_scrape_now))
     app.add_handler(CommandHandler("sources", admin_sources))
 
-    # Runs for every update, in every group, to remember owner chat IDs
     app.add_handler(TypeHandler(Update, track_owner), group=-1)
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
