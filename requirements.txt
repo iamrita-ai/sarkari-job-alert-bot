@@ -1,0 +1,15 @@
+# Telegram bot framework (includes APScheduler-based JobQueue)
+python-telegram-bot[job-queue]>=21.6,<22
+
+# Async HTTP client with HTTP/2 support (browser-like TLS handshake)
+httpx[http2]>=0.27,<1
+
+# HTML parsing for the scraper
+beautifulsoup4>=4.12,<5
+lxml>=5.2,<6
+
+# Async SQLite database
+aiosqlite>=0.20,<1
+
+# .env file support for local development
+python-dotenv>=1.0,<2

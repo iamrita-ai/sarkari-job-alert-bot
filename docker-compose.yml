@@ -1,0 +1,19 @@
+services:
+  sarkari-job-alert-bot:
+    build: .
+    image: sarkari-job-alert-bot:latest
+    container_name: sarkari-job-alert-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ENABLE_HEALTH_SERVER: "true"
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Named volume keeps the SQLite database across container rebuilds
+      - sarkari_job_data:/app/data
+
+volumes:
+  sarkari_job_data:

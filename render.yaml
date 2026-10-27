@@ -1,0 +1,29 @@
+# Render deployment blueprint - https://render.com/docs/blueprint-spec
+# Deploy: push this repo to GitHub -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: sarkari-job-alert-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false          # set this secret manually in Render dashboard
+      - key: CHECK_INTERVAL_MINUTES
+        value: "30"
+      - key: OWNER_USERNAMES
+        value: "TechnicalSerena,Xioqui_xin"
+      - key: ENABLE_HEALTH_SERVER
+        value: "true"
+      - key: USE_JINA_FALLBACK
+        value: "true"
+      - key: JINA_API_KEY
+        sync: false
+      - key: DATABASE_PATH
+        value: "data/bot.db"
+# NOTE: free web services sleep after inactivity. The bot itself keeps
+# polling Telegram while awake, but Render may restart the container.
+# For 24x7 guaranteed uptime use a paid instance and attach a 1 GB disk
+# mounted at /app/data so the SQLite database persists across deploys.
