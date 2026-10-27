@@ -27,6 +27,8 @@ async def _post_init(app: Application) -> None:
     scraper = SarkariScraper()
     app.bot_data["db"] = db
     app.bot_data["scraper"] = scraper
+    app.bot_data["owner_chat_ids"] = set()
+    app.bot_data["last_owner_failure_alert"] = None
 
     monitor = JobMonitor(app)
     app.bot_data["monitor"] = monitor
@@ -49,7 +51,9 @@ async def _post_init(app: Application) -> None:
     ])
 
     if config.ENABLE_HEALTH_SERVER:
-        app.bot_data["health_server"] = start_health_server(config.PORT)
+        app.bot_data["health_server"] = start_health_server(
+            config.PORT, status_provider=lambda: scraper.status
+        )
 
 
 async def _post_shutdown(app: Application) -> None:

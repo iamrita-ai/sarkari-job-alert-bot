@@ -156,3 +156,24 @@ SECTORS: list[dict] = [
 ]
 SECTOR_MAP: dict[str, dict] = {s["key"]: s for s in SECTORS}
 SECTOR_KEYS: set[str] = set(SECTOR_MAP)
+
+# Telegram inline buttons cannot be custom-coloured (Bot API limitation), so
+# each sector gets a distinctive coloured/topic emoji for visual scanning.
+SECTOR_EMOJI: dict[str, str] = {
+    "railway": "🚆",
+    "ssc": "📋",
+    "upsc": "🏛️",
+    "defence_police": "🛡️",
+    "banking": "🏦",
+    "teaching": "👨‍🏫",
+    "state_govt": "🏢",
+    "psu": "⚙️",
+    "court": "⚖️",
+    "medical": "🏥",
+    "clerk_deo": "💻",
+    "apprentice": "🔧",
+}
+
+CATEGORY_EMOJI: dict[str, str] = {
+    "UR": "🟢", "OBC": "🔵", "EWS": "🟡", "SC": "🟣", "ST": "🟠",
+}

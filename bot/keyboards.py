@@ -1,14 +1,28 @@
-"""Inline keyboards used by the bot's conversations and menus."""
+"""Inline keyboards used by the bot's conversations and menus.
+
+Telegram's Bot API renders every inline button in the user's theme colour -
+custom button colours are not supported. Coloured emoji prefixes are used
+instead so options are visually distinct at a glance.
+"""
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.constants import CATEGORIES, QUALIFICATIONS, SECTORS
+from bot.constants import (
+    CATEGORIES,
+    CATEGORY_EMOJI,
+    QUALIFICATIONS,
+    SECTOR_EMOJI,
+    SECTORS,
+)
 
 
 def category_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(label, callback_data=f"cat:{key}")]
+        [InlineKeyboardButton(
+            f"{CATEGORY_EMOJI.get(key, '🔘')} {label}",
+            callback_data=f"cat:{key}",
+        )]
         for key, label in CATEGORIES
     ]
     return InlineKeyboardMarkup(rows)
@@ -16,7 +30,9 @@ def category_keyboard() -> InlineKeyboardMarkup:
 
 def qualification_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(q["label"], callback_data=f"qual:{q['key']}")]
+        [InlineKeyboardButton(
+            f"🎓 {q['label']}", callback_data=f"qual:{q['key']}"
+        )]
         for q in QUALIFICATIONS
     ]
     return InlineKeyboardMarkup(rows)
@@ -26,10 +42,12 @@ def sectors_keyboard(selected: set[str]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for sector in SECTORS:
-        tick = "✅ " if sector["key"] in selected else ""
+        emoji = SECTOR_EMOJI.get(sector["key"], "🔘")
+        state = "✅" if sector["key"] in selected else "⬜"
         row.append(
             InlineKeyboardButton(
-                f"{tick}{sector['label']}", callback_data=f"sec:{sector['key']}"
+                f"{state} {emoji} {sector['label']}",
+                callback_data=f"sec:{sector['key']}",
             )
         )
         if len(row) == 2:
@@ -37,12 +55,17 @@ def sectors_keyboard(selected: set[str]) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("✅ Done — Save Preferences", callback_data="sec:done")])
+    rows.append([
+        InlineKeyboardButton("✅ Done — Save Preferences", callback_data="sec:done")
+    ])
     return InlineKeyboardMarkup(rows)
 
 
 def main_menu_keyboard(active: bool) -> InlineKeyboardMarkup:
-    toggle = ("⏸ Pause Alerts", "menu:pause") if active else ("▶️ Resume Alerts", "menu:resume")
+    toggle = (
+        ("⏸ Pause Alerts", "menu:pause") if active
+        else ("▶️ Resume Alerts", "menu:resume")
+    )
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔔 Latest Matching Jobs", callback_data="menu:latest")],
         [InlineKeyboardButton("✏️ Edit Profile", callback_data="menu:edit"),

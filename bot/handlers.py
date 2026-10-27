@@ -12,6 +12,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -49,6 +50,13 @@ def _scraper(context: ContextTypes.DEFAULT_TYPE):
 def _is_owner(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.username and user.username.lower() in config.OWNER_USERNAMES)
+
+
+async def track_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remember owner chat IDs so the scheduler can DM them outage alerts."""
+    user = update.effective_user
+    if user and user.username and user.username.lower() in config.OWNER_USERNAMES:
+        context.application.bot_data.setdefault("owner_chat_ids", set()).add(user.id)
 
 
 # ------------------------------------------------------------- onboarding
@@ -373,6 +381,39 @@ async def admin_scrape_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("✅ Scrape cycle complete.")
 
 
+async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_owner(update):
+        await update.message.reply_text("🚫 Owner-only command.")
+        return
+    status = await update.message.reply_text("🩺 Probing every data source…")
+    report = await _scraper(context).source_healthcheck()
+    lines = ["🩺 <b>Data-source health</b>", "━━━━━━━━━━━━━━━━━━"]
+    for entry in report:
+        if entry["ok"]:
+            lines.append(f"✅ <b>{entry['source']}</b> — {entry['jobs']} jobs")
+        else:
+            lines.append(f"❌ <b>{entry['source']}</b> — {esc(entry['error'])}")
+    scraper_status = _scraper(context).status
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append(
+        f"Last success: {esc(scraper_status.get('last_success_at') or 'never')} "
+        f"via {esc(scraper_status.get('last_success_source') or '—')}"
+    )
+    await status.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Last-resort guard: log the failure and keep the bot alive."""
+    logger.exception("Unhandled error while processing update %s", update, exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ Something went wrong on my side. Please try again in a moment."
+            )
+        except Exception:  # noqa: BLE001 - never raise out of the error handler
+            logger.exception("Failed to deliver the generic error message")
+
+
 # -------------------------------------------------------------- registration
 def register_handlers(app: Application) -> None:
     conversation = ConversationHandler(
@@ -402,6 +443,10 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
     app.add_handler(CommandHandler("scrape_now", admin_scrape_now))
+    app.add_handler(CommandHandler("sources", admin_sources))
 
+    # Runs for every update, in every group, to remember owner chat IDs
+    app.add_handler(TypeHandler(Update, track_owner), group=-1)
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
+    app.add_error_handler(global_error_handler)

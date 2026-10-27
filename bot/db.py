@@ -70,7 +70,30 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_jobs_pending
                 ON jobs(detail_fetched, first_seen);
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
+        )
+        await self._db.commit()
+
+    # -------------------------------------------------------------------- meta
+    async def get_meta(self, key: str, default: str | None = None) -> str | None:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["value"] if row else default
+
+    async def set_meta(self, key: str, value: str) -> None:
+        assert self._db is not None
+        await self._db.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )
         await self._db.commit()
 

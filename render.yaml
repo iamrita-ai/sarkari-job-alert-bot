@@ -17,6 +17,10 @@ services:
         value: "TechnicalSerena,Xioqui_xin"
       - key: ENABLE_HEALTH_SERVER
         value: "true"
+      - key: SOURCE_ORDER
+        value: "mirror,original,original-jina"
+      - key: MIRROR_BASE_URL
+        value: "https://sarkariresult.com.cm"
       - key: USE_JINA_FALLBACK
         value: "true"
       - key: JINA_API_KEY

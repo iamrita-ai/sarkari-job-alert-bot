@@ -36,20 +36,39 @@ CHECK_INTERVAL_MINUTES: float = float(os.getenv("CHECK_INTERVAL_MINUTES", "30"))
 DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "bot.db"))
 Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
 
-# --- Health-check server (Render / getvoroa) ------------------------------
+# --- Health-check server (Render / getvoroa / Voroa) ----------------------
 ENABLE_HEALTH_SERVER: bool = _get_bool("ENABLE_HEALTH_SERVER", True)
 PORT: int = int(os.getenv("PORT", "8080"))
 
-# --- Scraper --------------------------------------------------------------
-LISTING_URLS: list[str] = [
-    u.strip()
-    for u in os.getenv(
-        "LISTING_URLS", "https://www.sarkariresult.com/latestjob/"
-    ).split(",")
-    if u.strip()
+# --------------------------------------------------------------- data sources
+# The original www.sarkariresult.com sits behind CloudFront and blocks most
+# datacenter IPs. This WordPress mirror is not behind CloudFront and publishes
+# the same notifications, so it is the primary production source.
+MIRROR_BASE_URL: str = os.getenv(
+    "MIRROR_BASE_URL", "https://sarkariresult.com.cm"
+).rstrip("/")
+MIRROR_LISTING_PATH: str = os.getenv("MIRROR_LISTING_PATH", "/latest-jobs/")
+
+ORIGINAL_BASE_URL: str = os.getenv(
+    "ORIGINAL_BASE_URL", "https://www.sarkariresult.com"
+).rstrip("/")
+ORIGINAL_LISTING_PATH: str = os.getenv("ORIGINAL_LISTING_PATH", "/latestjob/")
+
+# Comma-separated source chain, tried in order until one returns jobs.
+#   mirror          -> sarkariresult.com.cm (direct HTML, works on cloud hosts)
+#   original        -> www.sarkariresult.com direct (works on residential IPs)
+#   original-jina   -> www.sarkariresult.com via r.jina.ai reader (last resort)
+SOURCE_ORDER: list[str] = [
+    s.strip()
+    for s in os.getenv("SOURCE_ORDER", "mirror,original,original-jina").split(",")
+    if s.strip()
 ]
+
+# Reader proxy used when the source site blocks the host IP
 USE_JINA_FALLBACK: bool = _get_bool("USE_JINA_FALLBACK", True)
 JINA_API_KEY: str = os.getenv("JINA_API_KEY", "").strip()
+
+# Politeness / safety limits
 MAX_DETAIL_FETCHES_PER_RUN: int = int(os.getenv("MAX_DETAIL_FETCHES_PER_RUN", "8"))
 REQUEST_DELAY_SECONDS: float = float(os.getenv("REQUEST_DELAY_SECONDS", "2.0"))
 REQUEST_TIMEOUT: float = float(os.getenv("REQUEST_TIMEOUT", "25"))

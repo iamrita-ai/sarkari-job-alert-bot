@@ -1,5 +1,5 @@
-# Telegram bot framework (includes APScheduler-based JobQueue)
-python-telegram-bot[job-queue]>=21.6,<22
+# Telegram bot framework v22 (includes APScheduler-based JobQueue)
+python-telegram-bot[job-queue]>=22.8,<23
 
 # Async HTTP client with HTTP/2 support (browser-like TLS handshake)
 httpx[http2]>=0.27,<1

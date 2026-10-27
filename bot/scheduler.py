@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, RetryAfter, TelegramError
@@ -10,8 +11,13 @@ from telegram.error import Forbidden, RetryAfter, TelegramError
 from bot import config, matcher
 from bot.cards import job_card
 from bot.models import JobSummary, UserProfile
+from bot.scraper import ScraperError
 
 logger = logging.getLogger(__name__)
+
+BOOTSTRAP_FLAG = "bootstrap_v2_done"
+OWNER_ALERT_AFTER_FAILURES = 2
+OWNER_ALERT_COOLDOWN_SECONDS = 3 * 3600
 
 
 class JobMonitor:
@@ -34,24 +40,23 @@ class JobMonitor:
                 logger.exception("Job monitor cycle failed")
 
     async def _run_cycle(self) -> None:
-        # 1. Refresh the listing(s)
+        # 1. Refresh the listing(s) through the source chain
         try:
             jobs = await self.scraper.fetch_latest_jobs()
-        except Exception:
-            logger.exception("Could not fetch job listing")
-            return
-        if not jobs:
-            logger.warning("Listing returned zero parseable jobs")
+        except ScraperError as exc:
+            logger.error("Every listing source failed: %s", exc)
+            await self._maybe_alert_owners(str(exc))
             return
 
-        seen_before = await self.db.get_seen_job_ids()
-        bootstrap = not seen_before
         await self.db.upsert_jobs(jobs)
-        if bootstrap:
+
+        # Fresh deployment OR upgrade from the old single-source version:
+        # silently catalogue everything that already exists, no mass alerts.
+        if await self.db.get_meta(BOOTSTRAP_FLAG) is None:
             await self.db.mark_bootstrap_complete()
+            await self.db.set_meta(BOOTSTRAP_FLAG, "1")
             logger.info(
-                "Bootstrap run: %d existing jobs marked as seen, no alerts sent",
-                len(jobs),
+                "Bootstrap run: %d existing jobs catalogued, no alerts sent", len(jobs)
             )
             return
 
@@ -118,3 +123,30 @@ class JobMonitor:
             return False
         await self.db.mark_notified(user.user_id, job.job_id)
         return True
+
+    async def _maybe_alert_owners(self, error: str) -> None:
+        """Tell owners once (with cooldown) when all scrape sources are down."""
+        failures = int(self.scraper.status.get("consecutive_failures", 0))
+        if failures < OWNER_ALERT_AFTER_FAILURES:
+            return
+        now = time.monotonic()
+        last = self.app.bot_data.get("last_owner_failure_alert")
+        # None means "never alerted" - do NOT compare against monotonic 0,
+        # because on a fresh container monotonic() itself is close to zero.
+        if last is not None and now - last < OWNER_ALERT_COOLDOWN_SECONDS:
+            return
+        owner_ids: set[int] = self.app.bot_data.get("owner_chat_ids", set())
+        if not owner_ids:
+            return
+        self.app.bot_data["last_owner_failure_alert"] = now
+        text = (
+            "🚨 <b>Scraper alert</b>\n"
+            f"All data sources failed {failures} time(s) in a row.\n"
+            f"<code>{error[:600]}</code>\n"
+            "Use /sources to diagnose. The bot keeps retrying automatically."
+        )
+        for chat_id in owner_ids:
+            try:
+                await self.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+            except TelegramError:
+                logger.exception("Could not deliver owner alert to %s", chat_id)
