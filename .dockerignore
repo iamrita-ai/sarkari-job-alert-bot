@@ -1,0 +1,25 @@
+# Keep the Docker build context small and fast
+.git
+.github
+.venv
+venv
+env
+data
+*.db
+*.db-wal
+*.db-shm
+*.log
+.env
+.env.*
+!.env.example
+tests
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.DS_Store
+.idea
+.vscode
+README.md
+LICENSE

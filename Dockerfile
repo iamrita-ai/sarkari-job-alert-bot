@@ -2,13 +2,21 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    # Survive slow/flaky builder networks (files.pythonhosted.org timeouts)
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-# Install dependencies first (better Docker layer caching)
+# Install dependencies first (better Docker layer caching).
+# --retries + long timeout: transient PyPI read timeouts no longer fail the build.
+# --prefer-binary: always take wheels, never fall back to slow source builds.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install --no-cache-dir \
+       --retries 5 --timeout 120 --prefer-binary \
+       -r requirements.txt
 
 # Copy application code
 COPY bot ./bot

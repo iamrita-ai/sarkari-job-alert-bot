@@ -91,7 +91,7 @@ def _summarise(url: str, text: str) -> JobSummary | None:
 
 # ------------------------------------------------------------- listing parse
 def parse_listing_html(html: str, base_url: str) -> list[JobSummary]:
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     container = (
         soup.select_one("#content")
         or soup.select_one("main")
@@ -135,7 +135,7 @@ def _markdown_to_text_and_links(markdown: str) -> tuple[str, list[tuple[str, str
 
 
 def _html_to_text_and_links(html: str) -> tuple[str, list[tuple[str, str]]]:
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "svg"]):
         tag.decompose()
     lines = [
