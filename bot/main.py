@@ -1,13 +1,16 @@
 """Entry point - wires the database, scraper, scheduler and bot together."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import time as dtime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, Update
-from telegram.ext import Application, PicklePersistence
+from telegram.error import Conflict, NetworkError, TimedOut
+from telegram.ext import Application, PersistenceInput, PicklePersistence
 
 from bot import config
 from bot.db import build_database
@@ -25,11 +28,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Runtime objects shared between the health endpoint and the bot itself.
+_RUNTIME: dict = {}
+
+# The hosting platform probes ONE port. We bind the configured PORT plus the
+# usual fallbacks, so the service is reachable no matter which port the
+# platform picked.
+FALLBACK_PORTS: tuple[int, ...] = (8000, 8080, 3000)
+
+
+def _health_status() -> dict:
+    """Scraper status for /health (never raises)."""
+    scraper = _RUNTIME.get("scraper")
+    status: dict = {"status": "starting"}
+    if scraper is not None:
+        try:
+            status = dict(scraper.status)
+        except Exception:  # noqa: BLE001 - health must never crash
+            status = {"status": "unknown"}
+    conflict = _RUNTIME.get("last_conflict")
+    if conflict:
+        status["last_conflict"] = conflict
+        status["status"] = "duplicate-instance"
+    return status
+
+
+def build_persistence(path: str) -> PicklePersistence:
+    """Conversation-state persistence.
+
+    ONLY the conversation states are stored. ``bot_data`` holds live runtime
+    objects (the SQLite connection, the HTTP client) which can not be pickled -
+    persisting them kills the bot on shutdown with
+    ``TypeError: cannot pickle 'sqlite3.Connection' object``.
+    """
+    return PicklePersistence(
+        filepath=path,
+        store_data=PersistenceInput(
+            bot_data=False,
+            chat_data=False,
+            user_data=False,
+            callback_data=False,
+        ),
+    )
+
 
 async def _post_init(app: Application) -> None:
     db = await build_database()
 
     scraper = SarkariScraper()
+    _RUNTIME["scraper"] = scraper
     app.bot_data["db"] = db
     app.bot_data["scraper"] = scraper
     app.bot_data["owner_chat_ids"] = set()
@@ -37,9 +84,17 @@ async def _post_init(app: Application) -> None:
     app.bot_data["browsers"] = {}
     app.bot_data["saved_browsers"] = {}
 
-    me = await app.bot.get_me()
-    app.bot_data["bot_username"] = me.username
-    logger.info("Running as @%s", me.username)
+    me = None
+    for attempt in range(1, 4):
+        try:
+            me = await app.bot.get_me()
+            break
+        except Exception:  # noqa: BLE001 - never block the start-up
+            logger.warning("get_me failed (attempt %s/3)", attempt, exc_info=True)
+            await asyncio.sleep(3)
+    if me is not None:
+        app.bot_data["bot_username"] = me.username
+        logger.info("Running as @%s", me.username)
 
     monitor = JobMonitor(app)
     app.bot_data["monitor"] = monitor
@@ -76,6 +131,8 @@ async def _post_init(app: Application) -> None:
                 "ENABLE_WEB_APP is on but fastapi/uvicorn are missing - "
                 "run: pip install -r requirements-web.txt"
             )
+        except Exception:  # noqa: BLE001 - the dashboard must never kill the bot
+            logger.exception("Could not start the web dashboard")
 
     await app.bot.set_my_commands([
         BotCommand("start", "Create / view your job profile"),
@@ -90,19 +147,99 @@ async def _post_init(app: Application) -> None:
         BotCommand("webapp", "Open your personal web dashboard"),
     ])
 
-    if config.ENABLE_HEALTH_SERVER:
-        app.bot_data["health_server"] = start_health_server(
-            config.PORT, status_provider=lambda: scraper.status
-        )
-
 
 async def _post_shutdown(app: Application) -> None:
-    await app.bot_data["scraper"].close()
-    await app.bot_data["db"].close()
-    server = app.bot_data.get("health_server")
-    if server is not None:
-        server.shutdown()
+    scraper = app.bot_data.get("scraper")
+    if scraper is not None:
+        try:
+            await scraper.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not close the scraper cleanly")
+    db = app.bot_data.get("db")
+    if db is not None:
+        try:
+            await db.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not close the database cleanly")
+    # NOTE: the health server keeps running on purpose - if the bot restarts
+    # after a crash the platform must still see a live service.
     logger.info("Shutdown complete")
+
+
+def _start_health_servers() -> None:
+    """Start the /health endpoint on the configured port + common fallbacks."""
+    if not config.ENABLE_HEALTH_SERVER:
+        return
+    ports: list[int] = [config.PORT]
+    ports.extend(p for p in FALLBACK_PORTS if p != config.PORT)
+    for port in ports:
+        try:
+            server = start_health_server(port, status_provider=_health_status)
+        except OSError:
+            logger.warning("Port %s is not available - skipping", port)
+            continue
+        _RUNTIME.setdefault("health_servers", []).append(server)
+
+
+async def _notify_owners(owner_ids, text: str) -> None:
+    """Tell the owners about a problem (best effort, never raises)."""
+    if not owner_ids:
+        return
+    from telegram import Bot
+
+    bot = Bot(config.BOT_TOKEN)
+    try:
+        for chat_id in owner_ids:
+            try:
+                await bot.send_message(chat_id=chat_id, text=text)
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not notify owner %s", chat_id)
+    finally:
+        await bot.shutdown()
+
+
+def _run_with_retries(app: Application) -> None:
+    """Keep the bot alive.
+
+    A duplicate instance (409) or a network hiccup must never take the
+    service down for good - we retry with a growing back-off instead.
+    """
+    delay = 15
+    last_conflict_alert = 0.0
+    while True:
+        try:
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                bootstrap_retries=-1,  # retry the start-up forever
+            )
+            return
+        except (Conflict, TimedOut, NetworkError) as exc:
+            logger.warning(
+                "Polling stopped (%s). Another instance may be using the same "
+                "bot token - retrying in %s seconds.",
+                exc,
+                delay,
+            )
+            if isinstance(exc, Conflict):
+                _RUNTIME["last_conflict"] = str(exc)
+                now = time.monotonic()
+                if now - last_conflict_alert > 1800:
+                    last_conflict_alert = now
+                    try:
+                        asyncio.run(_notify_owners(
+                            app.bot_data.get("owner_chat_ids") or set(),
+                            "⚠️ *Another instance is polling with this bot token.*\n\n"
+                            "The updates are going to that instance. Stop the old "
+                            "service (or revoke the old token) - this one keeps "
+                            "retrying every few minutes.",
+                        ))
+                    except Exception:  # noqa: BLE001
+                        logger.exception("Could not notify the owners about the conflict")
+            time.sleep(delay)
+            delay = min(delay * 2, 300)
+        except Exception:  # noqa: BLE001 - the bot must never stay down
+            logger.exception("Unexpected polling error - restarting in 30 seconds")
+            time.sleep(30)
 
 
 def main() -> None:
@@ -120,14 +257,22 @@ def main() -> None:
         .build()
     )
     # Conversation persistence: the onboarding steps survive a restart, so a
-    # button pressed after a redeploy still works.
+    # button pressed after a redeploy still works. Only the conversation
+    # states are stored - bot_data holds live objects that cannot be pickled.
     if config.PERSISTENCE_PATH:
         try:
             Path(config.PERSISTENCE_PATH).parent.mkdir(parents=True, exist_ok=True)
-            app.persistence = PicklePersistence(filepath=config.PERSISTENCE_PATH)
-            logger.info("Conversation persistence: %s", config.PERSISTENCE_PATH)
+            app.persistence = build_persistence(config.PERSISTENCE_PATH)
+            logger.info(
+                "Conversation persistence: %s (conversation states only)",
+                config.PERSISTENCE_PATH,
+            )
         except Exception:  # noqa: BLE001 - never block the bot on this
             logger.exception("Could not enable conversation persistence")
+
+    # The health endpoint comes up BEFORE the Telegram connection, so the
+    # platform always sees a listening service (even if Telegram is slow).
+    _start_health_servers()
 
     register_handlers(app)
     register_reminders(app)
@@ -137,7 +282,7 @@ def main() -> None:
         config.CHECK_INTERVAL_MINUTES,
         ", ".join(sorted(config.OWNER_USERNAMES)),
     )
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    _run_with_retries(app)
 
 
 if __name__ == "__main__":

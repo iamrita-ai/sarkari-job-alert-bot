@@ -98,7 +98,7 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
   bootstrap protection against mass-notifications on deploy
-- 🧪 **59 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
+- 🧪 **65 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
   documents, coloured buttons and storage
 
 ---
@@ -229,7 +229,7 @@ sarkari-job-alert-bot/
 │   ├── github_push.sh  # create + push the GitHub repo
 │   └── termux_setup.sh # one-shot Termux/Android setup
 ├── DEPLOYMENT.md       # PC, Termux, Docker, MongoDB Atlas guides
-├── tests/              # 59 offline tests (parsers, MD lint, age, degrees, storage,
+├── tests/              # 65 offline tests (parsers, MD lint, age, degrees, storage,
 │   │                    # dispatch, v1.5 features, web dashboard)
 ├── scripts/github_push.sh
 ├── Dockerfile
@@ -242,6 +242,12 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.5.1** — deployment hotfix: the persistence now stores only the
+  conversation states (the SQLite connection in `bot_data` could not be
+  pickled and killed the service on shutdown), the `/health` endpoint starts
+  **before** the Telegram connection and listens on `PORT` + 8000/8080/3000,
+  and the bot survives a duplicate instance (409) by retrying with back-off
+  and DM-ing the owner instead of dying
 - **v1.5** — never-silent bot: admit-card / exam-date / last-date-extension
   update alerts, daily 09:05 IST digest, broadcast-channel mirror, optional
   Groq AI summaries, Hindi + English cards, category-wise vacancy breakdown,
@@ -295,7 +301,7 @@ Then open your bot in Telegram and send `/start`.
 
 ```bash
 pip install pytest
-pytest -q        # 59 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
+pytest -q        # 65 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
                  # dispatch flow, v1.5 features, web dashboard
 ```
 

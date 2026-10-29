@@ -232,9 +232,16 @@ in Voroa **and** Termux (or an old container and a new one) causes:
 telegram.error.Conflict: terminated by other getUpdates request
 ```
 
-Stop every other instance before starting a new one. The bot logs a clear
-warning instead of crashing when this happens, but updates will not arrive
-until only one instance remains.
+Stop every other instance before starting a new one.
+
+**Since v1.5.1 the bot no longer dies in this situation:** it logs the
+conflict, keeps the `/health` endpoint up, retries the polling every 15-300
+seconds and sends you a direct message ("Another instance is polling with
+this bot token"). As soon as the old instance is stopped, the new one takes
+over automatically - no redeploy needed.
+
+> The old service on the platform must be deleted (or at least stopped),
+> otherwise the two keep fighting over the same token.
 
 ---
 
@@ -279,6 +286,9 @@ RUN pip install --no-cache-dir motor
 | Next / Previous buttons do nothing | Fixed in v1.4 — the browser callbacks were never registered. Pull the latest image (`docker compose pull && docker compose up -d`). |
 | A setup button (category / degrees / documents) does nothing | Either the bot restarted (state is persisted now, v1.5) or **a second instance with the same token is eating the updates**. The bot now answers such taps with "session expired" and the owner gets a "duplicate instance" DM — stop every copy except one. |
 | The bot feels silent for a whole day | Enable the daily digest (`DIGEST_ENABLED=true`, `DIGEST_HOUR=9`) and the notice-update watch list (`WATCH_JOBS_PER_RUN=4`). |
+| Deploy aborted: "we did not see your service listening on any port" | Fixed in v1.5.1 - the `/health` server now starts **before** the Telegram connection and listens on `PORT` plus the fallbacks 8000 / 8080 / 3000. Make sure `ENABLE_HEALTH_SERVER` is not `false`. |
+| Crash on shutdown: `TypeError: cannot pickle 'sqlite3.Connection' object` | Fixed in v1.5.1 - the persistence now stores **only** the conversation states; the database and HTTP client in `bot_data` are never pickled. |
+| `telegram.error.Conflict: terminated by other getUpdates` | Another instance is using the same token. The bot retries by itself and DMs the owner; stop the old instance. |
 | Old users have no degrees/documents after the v1.4 update | Normal — the columns default to empty. Send them `/edit` → Degrees / Documents, or they can tick them from `/start`. |
 | `Conflict: terminated by other getUpdates request` | Two instances share the token. Stop the duplicate (cloud service, Termux, old container). |
 | `/start` shows an error but scraping works | Redeploy latest commit; the welcome caption bug is fixed and the banner now falls back to text. |
