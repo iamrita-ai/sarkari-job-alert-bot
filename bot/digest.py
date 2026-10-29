@@ -64,10 +64,14 @@ async def build_digest(application, profile) -> str | None:  # noqa: ANN001
     return "\n".join(lines)
 
 
-async def send_daily_digest(application) -> int:  # noqa: ANN001
-    """JobQueue entry - runs every day at DIGEST_HOUR (IST)."""
+async def send_daily_digest(context) -> int:  # noqa: ANN001
+    """JobQueue entry - runs every day at DIGEST_HOUR (IST).
+
+    ``context`` is the PTB ``CallbackContext`` the job queue passes in.
+    """
     if not config.DIGEST_ENABLED:
         return 0
+    application = context.application
     db = application.bot_data["db"]
     users = await db.all_active_users()
     sent = 0
@@ -80,7 +84,7 @@ async def send_daily_digest(application) -> int:  # noqa: ANN001
         if not text:
             continue
         try:
-            await application.bot.send_message(
+            await context.bot.send_message(
                 chat_id=profile.user_id, text=text,
                 parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True,
             )

@@ -81,13 +81,20 @@ def test_bot_restarts_instead_of_dying_on_a_duplicate_instance(monkeypatch):
     calls: list[int] = []
     sleeps: list[float] = []
 
+    async def fake_notify(owner_ids, text):
+        return None
+
     class _FakeApp:
+        def __init__(self):
+            self.bot_data = {"owner_chat_ids": set()}
+
         def run_polling(self, **kwargs):
             calls.append(1)
             if len(calls) == 1:
                 raise Conflict("terminated by other getUpdates")
             return None
 
+    monkeypatch.setattr(bot_main, "_notify_owners", fake_notify)
     monkeypatch.setattr(bot_main.time, "sleep", lambda s: sleeps.append(s))
     bot_main._run_with_retries(_FakeApp())
     assert len(calls) == 2, "the bot did not retry after the conflict"
@@ -104,9 +111,11 @@ def test_conflict_notifies_the_owners(monkeypatch):
     class _FakeApp:
         def __init__(self):
             self.bot_data = {"owner_chat_ids": {42}}
+            self.calls = 0
 
         def run_polling(self, **kwargs):
-            if not notified:
+            self.calls += 1
+            if self.calls == 1:
                 raise Conflict("terminated by other getUpdates")
             return None
 
@@ -116,3 +125,97 @@ def test_conflict_notifies_the_owners(monkeypatch):
     assert notified, "the owners were not notified about the duplicate instance"
     assert notified[0][0] == {42}
     assert "Another instance" in notified[0][1]
+
+
+def test_daily_digest_uses_the_supported_ptb_api():
+    """PTB v22 has no ``tz`` argument on run_daily - that killed the bot."""
+    app = Application.builder().token("123:TEST").build()
+    bot_main.schedule_daily_digest(app)
+    jobs = app.job_queue.scheduler.get_jobs()
+    assert jobs, "the daily digest was not scheduled"
+    trigger = jobs[0].trigger
+    trigger_text = str(trigger)
+    assert "hour='9'" in trigger_text, f"wrong hour: {trigger_text}"
+    assert "minute='5'" in trigger_text, f"wrong minute: {trigger_text}"
+    tz = trigger.timezone
+    assert tz is not None, "the digest job has no timezone"
+    assert str(tz) == "Asia/Kolkata", f"wrong timezone: {tz}"
+
+
+def test_retry_loop_uses_a_fresh_event_loop(monkeypatch):
+    """PTB closes the loop when run_polling raises - the retry needs a new one."""
+    loops = []
+
+    class _FakeApp:
+        def run_polling(self, **kwargs):
+            loop = asyncio.get_event_loop()
+            loops.append(loop)
+            if len(loops) == 1:
+                loop.close()  # exactly what PTB does on shutdown
+                raise RuntimeError("Event loop is closed")
+            return None
+
+    monkeypatch.setattr(bot_main.time, "sleep", lambda s: None)
+    bot_main._run_with_retries(_FakeApp())
+    assert len(loops) == 2
+    assert loops[0] is not loops[1], "the closed loop was reused"
+    assert not loops[1].is_closed()
+
+
+def test_first_conflict_always_notifies_even_on_a_fresh_container(monkeypatch):
+    """A container that booted two minutes ago must still warn the owners."""
+    notified: list[tuple] = []
+
+    async def fake_notify(owner_ids, text):
+        notified.append((set(owner_ids), text))
+
+    class _FakeApp:
+        def __init__(self):
+            self.bot_data = {"owner_chat_ids": {42}}
+            self.calls = 0
+
+        def run_polling(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise Conflict("terminated by other getUpdates")
+            return None
+
+    monkeypatch.setattr(bot_main, "_notify_owners", fake_notify)
+    monkeypatch.setattr(bot_main.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bot_main.time, "monotonic", lambda: 123.0)  # fresh boot
+    bot_main._run_with_retries(_FakeApp())
+    assert notified, "the owners were not warned about the very first conflict"
+
+
+def test_post_init_completes_without_errors(monkeypatch):
+    """The whole start-up path must run - this caught run_daily(tz=...)."""
+    from telegram.ext import ExtBot
+
+    class _FakeDB:
+        async def pending_reminders(self):
+            return []
+
+        async def close(self):
+            return None
+
+    async def fake_build_database():
+        return _FakeDB()
+
+    async def fake_get_me(self, *args, **kwargs):
+        class _User:
+            username = "jobtestbot"
+
+        return _User()
+
+    async def fake_set_my_commands(self, *args, **kwargs):
+        return True
+
+    monkeypatch.setattr(bot_main, "build_database", fake_build_database)
+    monkeypatch.setattr(ExtBot, "get_me", fake_get_me)
+    monkeypatch.setattr(ExtBot, "set_my_commands", fake_set_my_commands)
+
+    app = Application.builder().token("123:TEST").build()
+    asyncio.run(bot_main._post_init(app))
+    jobs = app.job_queue.scheduler.get_jobs()
+    assert jobs, "no job was scheduled (digest / monitor missing)"
+    assert app.bot_data["bot_username"] == "jobtestbot"

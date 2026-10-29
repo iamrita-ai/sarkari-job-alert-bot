@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, Update
 from telegram.error import Conflict, NetworkError, TimedOut
-from telegram.ext import Application, PersistenceInput, PicklePersistence
+from telegram.ext import Application, Defaults, PersistenceInput, PicklePersistence
 
 from bot import config
 from bot.db import build_database
@@ -27,6 +27,9 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Everything the bot schedules runs on Indian time.
+IST = ZoneInfo("Asia/Kolkata")
 
 # Runtime objects shared between the health endpoint and the bot itself.
 _RUNTIME: dict = {}
@@ -72,6 +75,35 @@ def build_persistence(path: str) -> PicklePersistence:
     )
 
 
+def schedule_daily_digest(app: Application) -> None:
+    """Schedule the daily digest (09:05 IST).
+
+    PTB v22 has no ``tz`` argument on ``run_daily`` - the timezone comes from
+    the timezone-aware ``time`` object (and from the bot defaults).
+    """
+    if not config.DIGEST_ENABLED:
+        return
+    app.job_queue.run_daily(
+        send_daily_digest,
+        time=dtime(hour=config.DIGEST_HOUR, minute=5, tzinfo=IST),
+        days=tuple(range(7)),
+        name="daily-digest",
+    )
+    logger.info("Daily digest scheduled at %02d:05 IST", config.DIGEST_HOUR)
+
+
+def fresh_event_loop() -> asyncio.AbstractEventLoop:
+    """A brand-new event loop.
+
+    PTB closes the loop when ``run_polling`` returns or raises, so a restart
+    of the polling loop needs a new one - otherwise the retry dies with
+    "RuntimeError: Event loop is closed".
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop
+
+
 async def _post_init(app: Application) -> None:
     db = await build_database()
 
@@ -110,15 +142,10 @@ async def _post_init(app: Application) -> None:
 
     # Daily digest - one message every morning (IST) so the bot is never
     # silent for a whole day.
-    if config.DIGEST_ENABLED:
-        app.job_queue.run_daily(
-            send_daily_digest,
-            time=dtime(hour=config.DIGEST_HOUR, minute=5),
-            days=tuple(range(7)),
-            tz=ZoneInfo("Asia/Kolkata"),
-            name="daily-digest",
-        )
-        logger.info("Daily digest scheduled at %02d:05 IST", config.DIGEST_HOUR)
+    try:
+        schedule_daily_digest(app)
+    except Exception:  # noqa: BLE001 - a scheduling error must not kill the bot
+        logger.exception("Could not schedule the daily digest")
 
     # Optional web dashboard (FastAPI) - needs requirements-web.txt
     if config.ENABLE_WEB_APP:
@@ -205,8 +232,11 @@ def _run_with_retries(app: Application) -> None:
     service down for good - we retry with a growing back-off instead.
     """
     delay = 15
-    last_conflict_alert = 0.0
+    # ``None`` = the owners were not warned yet (the first conflict always
+    # warns them - even on a container that was booted a minute ago).
+    last_conflict_alert: float | None = None
     while True:
+        fresh_event_loop()
         try:
             app.run_polling(
                 allowed_updates=Update.ALL_TYPES,
@@ -223,7 +253,7 @@ def _run_with_retries(app: Application) -> None:
             if isinstance(exc, Conflict):
                 _RUNTIME["last_conflict"] = str(exc)
                 now = time.monotonic()
-                if now - last_conflict_alert > 1800:
+                if last_conflict_alert is None or now - last_conflict_alert > 1800:
                     last_conflict_alert = now
                     try:
                         asyncio.run(_notify_owners(
@@ -252,6 +282,8 @@ def main() -> None:
     app = (
         Application.builder()
         .token(config.BOT_TOKEN)
+        # The job queue (digest, reminders) runs on Indian time.
+        .defaults(Defaults(tzinfo=IST))
         .post_init(_post_init)
         .post_shutdown(_post_shutdown)
         .build()

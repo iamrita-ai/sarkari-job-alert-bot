@@ -289,6 +289,8 @@ RUN pip install --no-cache-dir motor
 | Deploy aborted: "we did not see your service listening on any port" | Fixed in v1.5.1 - the `/health` server now starts **before** the Telegram connection and listens on `PORT` plus the fallbacks 8000 / 8080 / 3000. Make sure `ENABLE_HEALTH_SERVER` is not `false`. |
 | Crash on shutdown: `TypeError: cannot pickle 'sqlite3.Connection' object` | Fixed in v1.5.1 - the persistence now stores **only** the conversation states; the database and HTTP client in `bot_data` are never pickled. |
 | `telegram.error.Conflict: terminated by other getUpdates` | Another instance is using the same token. The bot retries by itself and DMs the owner; stop the old instance. |
+| `TypeError: JobQueue.run_daily() got an unexpected keyword argument 'tz'` | Fixed in v1.5.2 - PTB v22 has no `tz` argument. The digest now uses a timezone-aware time object. |
+| `RuntimeError: Event loop is closed` | Fixed in v1.5.2 - the polling restart creates a new event loop. |
 | Old users have no degrees/documents after the v1.4 update | Normal — the columns default to empty. Send them `/edit` → Degrees / Documents, or they can tick them from `/start`. |
 | `Conflict: terminated by other getUpdates request` | Two instances share the token. Stop the duplicate (cloud service, Termux, old container). |
 | `/start` shows an error but scraping works | Redeploy latest commit; the welcome caption bug is fixed and the banner now falls back to text. |
