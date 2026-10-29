@@ -3,7 +3,7 @@
 A personalised Telegram bot that scrapes **[SarkariResult.com](https://www.sarkariresult.com/)**
 for the latest government job notifications and pushes **instant Telegram
 alerts** matched against each user's profile — name, reservation category,
-highest qualification and preferred job sectors.
+degrees, documents on hand and preferred job sectors.
 
 Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 **SQLite**, packaged in Docker so it runs identically on **Render**,
@@ -15,8 +15,16 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 
 ## ✨ Features
 
-- 🧑‍💼 **Full user profiles** — guided 5-step setup: name → **date of birth** →
-  category (UR / OBC / EWS / SC / ST) → qualification → multi-select job sectors
+- 🧑‍💼 **Full user profiles** — guided 6-step setup: name → **date of birth** →
+  category (UR / OBC / EWS / SC / ST) → **multi-select degrees** →
+  **multi-select documents** → multi-select job sectors. `/edit` opens a menu
+  where any single section can be changed without redoing the whole flow
+- 🎓 **Multi-degree matching** — tick *every* degree you hold (ITI **and**
+  B.Ed, B.Sc **and** M.Com …). A notice asking for one of them matches you even
+  when the generic rank scale would say "too low"
+- 📎 **Document readiness** — mark the papers you own; each job card then
+  shows ✅ / ❌ for every document that notice asks for, so nothing is missed
+  at the document counter
 - 🎯 **Smart matching on three dimensions**
   - sector keyword matching on vacancy title + URL slug
   - qualification ranking — a Graduate automatically qualifies for jobs asking
@@ -27,15 +35,24 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🗂️ **12 job sectors** — Railway, SSC, UPSC, Defence & Police, Banking &
   Insurance, Teaching, State Govt, PSU, Courts, Medical, Clerk/DEO, Apprentice
 - 🖼️ **Rich MarkdownV2 job cards with images** — job name (hyperlink),
-  organisation, qualification, **salary/pay**, **application fee**, age limit
-  (plus your age & relaxation), last apply date, and a coloured
-  **👉 Click Here to Fill Form** apply button; alerts are sent as photo captions
-  when the vacancy image is available, falling back to text automatically
+  organisation, notification date, **total posts**, selection process, the
+  **complete qualification text**, **salary/pay**, **application fee**, age
+  limit (plus your age & relaxation) and the full **important-dates block**
+  (apply start date, apply last date, fee-payment last date, correction
+  window, exam date, admit card, result date). A **📃 Full Notification Text**
+  button sends the entire notice (qualification + dates + how to apply) in
+  safe chunks — nothing is lost to the 4096-character limit. Alerts are sent
+  as photo captions when the vacancy image is available, falling back to text
+  automatically
 - 🎨 **Genuinely coloured inline buttons** — Bot API `style` (PTB 22.7+):
   blue `primary`, green `success` (Apply / Done), red `danger` (Pause / last-date)
 - 📄 **Paginated browsing** — `/latest` and `/scrape_now` render clean
   **Previous / Next** browsers; each job title is a deep link that reopens the
-  full card (with Save / Reminder / Apply) inside the bot
+  full card (with Save / Reminder / Apply) inside the bot *(the browser
+  callbacks were re-registered in v1.4 — Next/Previous now respond again)*
+- 👑 **Owner subscriber browser** — `/users` lists every subscriber with their
+  category, degrees and sectors; tapping a name opens that person's full
+  profile (degrees, documents, saved jobs) plus a **💬 Open Chat** button
 - 🔍 **Inline mode** — type `@your_bot <keyword>` in any chat, pick a result and
   it posts the job card; an *Open in Bot* deep link reopens it inside the bot DM
 - 🔖 **Save jobs & set date reminders** — bookmark any vacancy, then get a
@@ -57,7 +74,8 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
   bootstrap protection against mass-notifications on deploy
-- 🧪 **20 unit tests + CI** for parsers, MarkdownV2 cards, age rules and storage
+- 🧪 **43 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
+  documents, coloured buttons and storage
 
 ---
 
@@ -76,7 +94,7 @@ PTB JobQueue (every N min)
       ├─ 2. Parse listing → new JobSummary rows (jobs table)
       ├─ 3. For jobs someone subscribes to: fetch detail page
       │        → eligibility, age limits, fee, salary, image, apply/PDF links
-      ├─ 4. Match sector + qualification + age (category relaxation) per user
+      ├─ 4. Match sector + degrees + qualification + age per user
       └─ 5. Send photo card with coloured Apply button, log notification;
              users can bookmark the job or schedule a date reminder
 ```
@@ -89,7 +107,7 @@ PTB JobQueue (every N min)
 |---|---|
 | `/start` | Welcome banner, deep-link job cards, create/view profile |
 | `/profile` | Show saved preferences (incl. D.O.B and computed age) |
-| `/edit` | Update name / D.O.B / category / qualification / sectors |
+| `/edit` | Profile menu — change name, D.O.B, category, degrees, documents or sectors |
 | `/latest` | Browse matching jobs with Next / Previous pagination |
 | `/saved` | Bookmarked jobs and your active date reminders |
 | `/pause` / `/resume` | Stop / restart automatic alerts |
@@ -99,6 +117,7 @@ PTB JobQueue (every N min)
 | `/broadcast <text>` | 👑 Owners — message all active users |
 | `/scrape_now` | 👑 Owners — run a cycle, then browse all catalogued jobs |
 | `/sources` | 👑 Owners — live health check of every scraping source |
+| `/users` | 👑 Owners — browse every subscriber and open their profile |
 
 ### 🎨 Coloured inline buttons
 
@@ -129,7 +148,7 @@ same card opens inside the bot DM with Save / Reminder actions.
 sarkari-job-alert-bot/
 ├── bot/
 │   ├── config.py       # all settings from environment variables
-│   ├── constants.py    # categories, qualifications, sectors, age relaxation
+│   ├── constants.py    # categories, qualifications, degrees, documents, sectors
 │   ├── models.py       # JobSummary, JobDetail, UserProfile, SavedJob dataclasses
 │   ├── db.py           # async SQLite (users / jobs / notifications / bookmarks)
 │   ├── scraper.py      # httpx fetcher + mirror/original parsers (one file to fix)
@@ -139,7 +158,7 @@ sarkari-job-alert-bot/
 │   ├── browser.py      # paginated Next/Previous job browsers
 │   ├── inline.py       # inline-mode search + deep-link cards
 │   ├── reminders.py    # save jobs, date reminders, JobQueue re-arming
-│   ├── handlers.py     # commands, 5-step profile conversation, menus, admin
+│   ├── handlers.py     # commands, 6-step profile conversation, edit menu, admin
 │   ├── scheduler.py    # periodic scrape → match → photo/text notify pipeline
 │   ├── storage_mongo.py # optional MongoDB backend (same interface as db.py)
 │   ├── health.py       # /health HTTP server
@@ -151,7 +170,7 @@ sarkari-job-alert-bot/
 │   ├── github_push.sh  # create + push the GitHub repo
 │   └── termux_setup.sh # one-shot Termux/Android setup
 ├── DEPLOYMENT.md       # PC, Termux, Docker, MongoDB Atlas guides
-├── tests/              # 26 offline tests (parsers, MD lint, age, storage)
+├── tests/              # 43 offline tests (parsers, MD lint, age, degrees, storage)
 ├── scripts/github_push.sh
 ├── Dockerfile
 ├── docker-compose.yml
@@ -163,6 +182,11 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.4** — full notification cards (start/last date, full qualification,
+  total posts, selection process, documents), multi-select degrees & documents
+  with document-aware matching, `/edit` profile menu, owner `/users` browser,
+  every inline button coloured, browser Next/Previous callbacks fixed,
+  `/sources` now reports blocked fallbacks as *standby* instead of failure
 - **v1.3** — strict MarkdownV2 linting (fixes the `/start` parse-entity crash),
   banner text fallback, Previous/Next-only browsers with bot deep-link titles,
   graceful 409 conflict handling, optional MongoDB backend, Termux + PC

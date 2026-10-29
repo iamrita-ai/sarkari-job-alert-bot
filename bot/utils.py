@@ -25,7 +25,13 @@ def bold(text: str) -> str:
 
 
 def code(text: str) -> str:
-    return f"`{md_escape(text)}`"
+    """Inline code span.
+
+    A code span cannot contain an escaped backtick, so backticks inside the
+    value are replaced by apostrophes before escaping.
+    """
+    cleaned = str(text).replace("`", "'")
+    return f"`{md_escape(cleaned)}`"
 
 
 def link(label: str, url: str | None) -> str:

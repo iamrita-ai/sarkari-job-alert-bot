@@ -310,9 +310,216 @@ def _extract_og_image(soup: BeautifulSoup) -> str | None:
     return content.replace("http://", "https://") or None
 
 
+# ------------------------------------------------------------ label -> value
+# Notification pages publish their facts as "Label : Value" blocks. We read
+# them straight from the DOM (and from the plain-text fallback) so that the
+# card can show every important date instead of guessing.
+_LABEL_VALUE_SPLIT = re.compile(r"^(?P<label>[^:]{2,60}?)\s*:\s*(?P<value>.*)$")
+# A bare heading such as "Total Post" whose value sits in the next block
+_BARE_LABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9 &/()\-]{2,60}$")
+_FILLER_VALUES = {"for", "to", "and", "or", "of", "the", "-", "–"}
+
+
+def _norm_label(label: str) -> str:
+    return re.sub(r"\s+", " ", label).strip().strip(":").strip().lower()
+
+
+def _next_block_value(tag) -> str:
+    """Value that follows a label block (the next sibling paragraph/cell)."""
+    sibling = tag.find_next_sibling()
+    for _ in range(3):
+        if sibling is None:
+            break
+        if sibling.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            sibling = sibling.find_next_sibling()
+            continue
+        nxt = _clean(sibling.get_text(" ", strip=True))
+        if nxt and nxt.lower() not in _FILLER_VALUES:
+            return nxt
+        sibling = sibling.find_next_sibling()
+    return ""
+
+
+def _label_value_pairs_from_nodes(root) -> dict[str, str]:
+    """Collect 'Label : Value' pairs from list items, paragraphs and cells."""
+    pairs: dict[str, str] = {}
+    for tag in root.find_all(
+        ["li", "p", "td", "h2", "h3", "h4", "h5", "h6", "span"]
+    ):
+        if tag.name == "span" and tag.find(["li", "p", "td", "span"]):
+            continue  # wrapper span - the inner element is more precise
+        text = _clean(tag.get_text(" ", strip=True))
+        if not text or len(text) > 220:
+            continue
+        match = _LABEL_VALUE_SPLIT.match(text)
+        if match:
+            label = _norm_label(match.group("label"))
+            value = _clean(match.group("value"))
+        elif _BARE_LABEL_RE.match(text):
+            # "Total Post" heading -> the value is the block right after it
+            label = _norm_label(text)
+            value = _next_block_value(tag)
+        else:
+            continue
+        if not label or label in pairs:
+            continue
+        if not value:
+            # "Post Date:" on its own line -> take the next sibling block
+            value = _next_block_value(tag)
+        if value and len(value) <= 220:
+            pairs[label] = value
+    return pairs
+
+
+def _label_value_pairs_from_lines(lines: list[str]) -> dict[str, str]:
+    """Same idea for the plain-text/markdown fallback path."""
+    pairs: dict[str, str] = {}
+    for index, line in enumerate(lines):
+        text = _clean(line)
+        match = _LABEL_VALUE_SPLIT.match(text)
+        if match:
+            label = _norm_label(match.group("label"))
+            value = _clean(match.group("value"))
+        elif _BARE_LABEL_RE.match(text):
+            label = _norm_label(text)
+            value = ""
+        else:
+            continue
+        if not label or label in pairs:
+            continue
+        if not value and index + 1 < len(lines):
+            candidate = _clean(lines[index + 1])
+            if (candidate and candidate.lower() not in _FILLER_VALUES
+                    and not _LABEL_VALUE_SPLIT.match(candidate)):
+                value = candidate
+        if value and len(value) <= 220:
+            pairs[label] = value
+    return pairs
+
+
+def _first(pairs: dict[str, str], labels: list[str]) -> str:
+    """First non-empty value whose label matches one of ``labels``."""
+    for wanted in labels:
+        for key, value in pairs.items():
+            if key == wanted or key.startswith(wanted):
+                if value:
+                    return value
+    return ""
+
+
+def _table_by_header(soup: BeautifulSoup, header: str) -> BeautifulSoup | None:
+    for table in soup.find_all("table"):
+        first_row = table.find("tr")
+        if first_row is None:
+            continue
+        cells = [c.get_text(" ", strip=True) for c in first_row.find_all(["th", "td"])]
+        if cells and header.lower() in " ".join(cells).lower():
+            return table
+    return None
+
+
+def _eligibility_table(soup: BeautifulSoup) -> BeautifulSoup | None:
+    """The post/eligibility table (header may say 'Eligibility' or
+    'Education Qualification')."""
+    for table in soup.find_all("table"):
+        first_row = table.find("tr")
+        if first_row is None:
+            continue
+        cells = [c.get_text(" ", strip=True) for c in first_row.find_all(["th", "td"])]
+        joined = " ".join(cells).lower()
+        if "post name" in joined and ("eligib" in joined or "qualification" in joined):
+            return table
+    return None
+
+
+def _link_table(soup: BeautifulSoup) -> dict[str, str]:
+    """Map 'Apply Online Link' / 'Official Website' rows to their URLs."""
+    result: dict[str, str] = {}
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) < 2:
+                continue
+            label = _clean(cells[0].get_text(" ", strip=True)).lower()
+            anchor = cells[1].find("a", href=True)
+            if anchor is None:
+                continue
+            href = anchor["href"]
+            if _is_external(href):
+                result[label] = href
+    return result
+
+
+def _eligibility_from_tables(soup: BeautifulSoup) -> str:
+    """Full eligibility text from the 'Post Name | Eligibility Criteria' table."""
+    table = _eligibility_table(soup)
+    if table is None:
+        return ""
+    chunks: list[str] = []
+    rows = table.find_all("tr")
+    for index, row in enumerate(rows):
+        cells = row.find_all(["td", "th"])
+        if not cells:
+            continue
+        header = _clean(cells[0].get_text(" ", strip=True)).lower()
+        if index == 0 and "post name" in header:
+            continue
+        if len(cells) >= 2:
+            post_name = _clean(cells[0].get_text(" ", strip=True))
+            criteria = _clean(cells[1].get_text(" ", strip=True))
+            if not criteria or "read official notification" in criteria.lower():
+                continue
+            if criteria.lower() in {"eligibility criteria", "education qualification"}:
+                continue
+            chunks.append(f"{post_name}: {criteria}" if post_name else criteria)
+        elif cells:
+            chunks.append(_clean(cells[0].get_text(" ", strip=True)))
+    return " ".join(chunks)[:1500]
+
+
+def _section_after(soup: BeautifulSoup, pattern: str, limit: int = 900) -> str:
+    """Text that follows a heading like 'How To Fill ... Online Form'."""
+    heading = soup.find(string=lambda t: t and re.search(pattern, t, re.I))
+    if heading is None:
+        return ""
+    node = heading.parent
+    parts: list[str] = []
+    for sibling in node.find_all_next():
+        if sibling is node:
+            continue
+        if sibling.name in {"h1", "h2", "h3"}:
+            break
+        text = _clean(sibling.get_text(" ", strip=True))
+        if text and text not in parts:
+            parts.append(text)
+        if sum(len(p) for p in parts) > limit:
+            break
+    return " ".join(parts)[:limit]
+
+
+def _mode_of_selection(soup: BeautifulSoup) -> str:
+    table = _table_by_header(soup, "Mode Of Selection")
+    if table is None:
+        table = _table_by_header(soup, "Selection Process")
+    if table is None:
+        return ""
+    rows = table.find_all("tr")
+    parts: list[str] = []
+    for row in rows[1:]:
+        cells = [_clean(c.get_text(" ", strip=True)) for c in row.find_all(["td", "th"])]
+        parts.extend(c for c in cells if c)
+    if not parts:
+        cells = [_clean(c.get_text(" ", strip=True)) for c in rows[0].find_all(["td", "th"])]
+        parts = [c for c in cells if c]
+    return " → ".join(parts)[:300]
+
+
 def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "svg"]):
+    # The site menu/nav uses the same "Label: value" shape as the notice and
+    # would pollute the extracted facts (Admit Card -> Result, ...).
+    for tag in soup(["script", "style", "noscript", "svg", "nav", "header",
+                     "footer", "aside"]):
         tag.decompose()
     content = soup.select_one(".entry-content") or soup
     lines = [
@@ -324,22 +531,31 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
 
     # Organisation from the H1, falling back to the <title>
     organization = None
+    exam_name = ""
     if soup.h1 and soup.h1.get_text(strip=True):
-        organization = _clean(soup.h1.get_text(" ", strip=True))[:120]
+        exam_name = _clean(soup.h1.get_text(" ", strip=True))[:150]
+        organization = exam_name[:120]
     elif soup.title:
         organization = re.split(r"\s*[|\-–]\s*Sarkari", soup.title.text)[0].strip()[:120]
+        exam_name = organization
 
-    # Last application date
+    pairs = _label_value_pairs_from_nodes(content)
+    for key, value in _label_value_pairs_from_lines(lines).items():
+        pairs.setdefault(key, value)
+
+    # Last application date (listing level + detail page)
     last_date = ""
-    idx = _find_line(lines, r"apply online last date|last date (for|of)?\s*:")
+    idx = _find_line(lines, r"apply online last date|last date to apply")
     if idx >= 0:
         value = _line_after(lines, idx)
-        if match := re.match(
-            r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", value
-        ):
+        if match := re.match(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", value):
             last_date = _normalize_date(*match.groups()) or value
         else:
             last_date = value[:40]
+    apply_last_date = _first(pairs, [
+        "apply online last date", "online apply last date", "online form last date",
+        "last date to apply", "application last date", "closing date",
+    ])
 
     # Age limit (label + value on following line)
     age_bits: list[str] = []
@@ -349,15 +565,18 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
             age_bits.append(f"{lines[i].rstrip(': ')} {_line_after(lines, i)}")
     age_limit = " | ".join(_clean(b) for b in age_bits)[:220]
     min_age, max_age = _extract_age_limits(lines)
+    min_age = min_age or _age_from_pairs(pairs, "minimum age")
+    max_age = max_age or _age_from_pairs(pairs, "maximum age")
     if not age_limit and (min_age or max_age):
         age_limit = f"Minimum Age {min_age or '—'} Years | Maximum Age {max_age or '—'} Years"
 
-    fee = _extract_fee(lines)
-    salary = _extract_salary(lines)
-    image_url = _extract_og_image(soup)
+    fee = _extract_fee(lines) or _first(pairs, ["application fee", "application fees"])
+    salary = _extract_salary(lines) or _first(pairs, [
+        "salary", "salary pay scale", "pay scale", "pay level", "grade pay",
+    ])
 
-    # Eligibility: first qualification sentence after the "Eligibility Criteria"
-    # heading; fall back to any qualification keyword line in the page.
+    # Eligibility: the table holds the complete text, the heading the summary
+    qualification = _eligibility_from_tables(soup)
     eligibility = ""
     heading_idx = _find_line(lines, r"eligibility criteria|eligibility")
     if heading_idx >= 0:
@@ -370,6 +589,8 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
             (_clean(line)[:600] for line in lines if _QUAL_LINE_RE.search(line)),
             "",
         )
+    if not qualification:
+        qualification = eligibility
 
     important_dates = ""
     idx = _find_line(lines, r"important dates")
@@ -377,6 +598,31 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
         important_dates = _clean(" ".join(lines[idx:idx + 8]))[:350]
 
     apply_url, pdf_url = _mirror_apply_and_pdf(soup)
+    how_to_apply_text = _section_after(soup, r"how to (fill|apply)")[:900]
+    links = _link_table(soup)
+    official_site = next(
+        (url_ for label, url_ in links.items() if "official website" in label),
+        None,
+    )
+    short_notice = next(
+        (url_ for label, url_ in links.items() if "short notice" in label), None
+    )
+    if official_site is None:
+        official_site = next(
+            (url_ for label, url_ in links.items() if "official notification" in label),
+            None,
+        )
+
+    from bot.matcher import detect_documents
+
+    # Documents are looked for in the meaningful sections only - scanning the
+    # whole page produced false positives (fee refund text mentions "bank
+    # account", for example).
+    doc_scope = " ".join([
+        qualification, eligibility, important_dates, how_to_apply_text,
+        " ".join(v for k, v in pairs.items() if "document" in k),
+    ])
+    documents = detect_documents(doc_scope)
 
     return JobDetail(
         eligibility=eligibility,
@@ -385,13 +631,55 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
         organization=organization or None,
         apply_url=apply_url,
         notification_pdf=pdf_url,
-        image_url=image_url,
+        image_url=_extract_og_image(soup),
         salary=salary,
         fee=fee,
         min_age=min_age,
         max_age=max_age,
-        raw_text=text[:4000],
+        raw_text=text[:6000],
+        exam_name=exam_name,
+        post_date=_first(pairs, [
+            "post date", "notification date", "publish date", "published on",
+            "date of notification",
+        ]),
+        apply_start_date=_first(pairs, [
+            "apply online start date", "online apply start date",
+            "online form start date", "application start date",
+            "form start date", "apply start date",
+        ]),
+        apply_last_date=apply_last_date or last_date,
+        fee_last_date=_first(pairs, [
+            "last date for fee payment", "fee payment last date",
+        ]),
+        correction_date=_first(pairs, [
+            "correction date", "correction window", "correction date window",
+        ]),
+        exam_date=_first(pairs, ["exam date", "examination date"]),
+        admit_card_date=_first(pairs, ["admit card", "admit card date"]),
+        result_date=_first(pairs, ["result declared date", "result date"]),
+        total_posts=_first(pairs, [
+            "total post", "total posts", "total vacancy", "total vacancies",
+            "no of posts", "number of posts", "total no of post",
+        ]),
+        selection_process=_mode_of_selection(soup),
+        application_mode=_first(pairs, [
+            "apply mode", "mode of application", "application mode",
+        ]),
+        qualification=qualification,
+        how_to_apply=how_to_apply_text,
+        documents_required=documents,
+        official_site=official_site,
+        short_notice=short_notice,
     )
+
+
+def _age_from_pairs(pairs: dict[str, str], label: str) -> int | None:
+    value = _first(pairs, [label])
+    match = re.search(r"\d{2}", value)
+    if match and 14 <= int(match.group()) <= 70:
+        return int(match.group())
+    return None
+
 
 
 # ========================================================== ORIGINAL PARSERS
@@ -542,14 +830,42 @@ def _build_original_detail(text: str, links: list[tuple[str, str]]) -> JobDetail
     ):
         organization = _clean(match.group(1))[:120] or None
     apply_url, pdf_url = _pick_apply_url(links)
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    pairs = _label_value_pairs_from_lines(lines)
+    eligibility = _extract_eligibility(text)
+    age_limit = _extract_age(text)
+
+    from bot.matcher import detect_documents
+
     return JobDetail(
-        eligibility=_extract_eligibility(text),
-        age_limit=_extract_age(text),
+        eligibility=eligibility,
+        age_limit=age_limit,
         important_dates=_extract_dates(text),
         organization=organization,
         apply_url=apply_url,
         notification_pdf=pdf_url,
-        raw_text=text[:4000],
+        raw_text=text[:6000],
+        exam_name=organization or "",
+        post_date=_first(pairs, ["post date", "notification date", "publish date"]),
+        apply_start_date=_first(pairs, [
+            "apply online start date", "online apply start date",
+            "online form start date", "application start date", "form start date",
+        ]),
+        apply_last_date=_first(pairs, [
+            "apply online last date", "online apply last date",
+            "online form last date", "last date to apply",
+        ]),
+        fee_last_date=_first(pairs, ["last date for fee payment"]),
+        correction_date=_first(pairs, ["correction date", "correction window"]),
+        exam_date=_first(pairs, ["exam date", "examination date"]),
+        admit_card_date=_first(pairs, ["admit card"]),
+        result_date=_first(pairs, ["result declared date", "result date"]),
+        total_posts=_first(pairs, ["total post", "total posts", "total vacancy"]),
+        selection_process=_first(pairs, ["mode of selection", "selection process"]),
+        application_mode=_first(pairs, ["apply mode", "mode of application"]),
+        qualification=eligibility,
+        documents_required=detect_documents(text),
     )
 
 

@@ -31,6 +31,24 @@ class JobDetail:
     min_age: int | None = None
     max_age: int | None = None
     raw_text: str = ""
+    # --- v1.4: full notification features -------------------------------
+    exam_name: str = ""              # "Railway RRB Station Master 2026"
+    post_date: str = ""              # notification / post published date
+    apply_start_date: str = ""       # "Apply Online Start Date"
+    apply_last_date: str = ""        # "Apply Online Last Date"
+    fee_last_date: str = ""          # "Last Date For Fee Payment"
+    correction_date: str = ""        # "Correction Date"
+    exam_date: str = ""              # "Exam Date"
+    admit_card_date: str = ""        # "Admit Card"
+    result_date: str = ""            # "Result Declared Date"
+    total_posts: str = ""            # "Total Posts: 1265"
+    selection_process: str = ""      # "Mode Of Selection"
+    application_mode: str = ""       # "Apply Mode: Online / Offline"
+    qualification: str = ""          # FULL qualification text (multi-line)
+    how_to_apply: str = ""           # "How To Fill ... Online Form" steps
+    documents_required: list[str] = dataclasses.field(default_factory=list)
+    official_site: str | None = None
+    short_notice: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), ensure_ascii=False)
@@ -57,6 +75,8 @@ class UserProfile:
     active: bool = True
     created_at: str = ""
     updated_at: str = ""
+    degrees: list[str] = dataclasses.field(default_factory=list)     # multi-select
+    documents: list[str] = dataclasses.field(default_factory=list)   # multi-select
 
     @property
     def qual_rank(self) -> int:
@@ -69,6 +89,18 @@ class UserProfile:
         from bot.constants import SECTOR_MAP
 
         return [SECTOR_MAP[k]["label"] for k in self.sectors if k in SECTOR_MAP]
+
+    @property
+    def degree_labels(self) -> list[str]:
+        from bot.constants import DEGREE_MAP
+
+        return [DEGREE_MAP[k]["label"] for k in self.degrees if k in DEGREE_MAP]
+
+    @property
+    def document_labels(self) -> list[str]:
+        from bot.constants import DOCUMENT_MAP
+
+        return [DOCUMENT_MAP[k]["label"] for k in self.documents if k in DOCUMENT_MAP]
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)

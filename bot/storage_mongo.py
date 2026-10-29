@@ -85,6 +85,8 @@ class MongoDatabase:
             active=bool(doc.get("active", True)),
             created_at=doc.get("created_at", ""),
             updated_at=doc.get("updated_at", ""),
+            degrees=list(doc.get("degrees", []) or []),
+            documents=list(doc.get("documents", []) or []),
         )
 
     async def get_user(self, user_id: int) -> UserProfile | None:
@@ -92,16 +94,22 @@ class MongoDatabase:
         return self._profile_from_doc(doc) if doc else None
 
     async def upsert_user(self, user_id, username, full_name, category,
-                          qualification, sectors, dob) -> UserProfile:
+                          qualification, sectors, dob,
+                          degrees=None, documents=None) -> UserProfile:
         now = _iso()
         existing = await self.get_user(user_id)
         created = existing.created_at if existing else now
+        if degrees is None:
+            degrees = existing.degrees if existing else []
+        if documents is None:
+            documents = existing.documents if existing else []
         await self._db["users"].update_one(
             {"_id": user_id},
             {"$set": {
                 "username": username, "full_name": full_name,
                 "category": category, "qualification": qualification,
                 "sectors": sectors, "dob": dob, "active": True,
+                "degrees": list(degrees), "documents": list(documents),
                 "updated_at": now,
             }, "$setOnInsert": {"_id": user_id, "created_at": created}},
             upsert=True,
@@ -109,6 +117,24 @@ class MongoDatabase:
         profile = await self.get_user(user_id)
         assert profile is not None
         return profile
+
+    async def update_user(self, user_id: int, **fields) -> UserProfile | None:
+        """Partial profile update used by the /edit menu."""
+        allowed = {
+            "full_name", "category", "qualification", "dob", "sectors",
+            "degrees", "documents", "username",
+        }
+        payload = {
+            key: (list(value) if isinstance(value, (list, tuple, set)) else value)
+            for key, value in fields.items()
+            if key in allowed and value is not None
+        }
+        if payload:
+            payload["updated_at"] = _iso()
+            await self._db["users"].update_one(
+                {"_id": user_id}, {"$set": payload}
+            )
+        return await self.get_user(user_id)
 
     async def set_active(self, user_id: int, active: bool) -> None:
         await self._db["users"].update_one(

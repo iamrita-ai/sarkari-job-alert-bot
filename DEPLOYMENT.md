@@ -276,9 +276,11 @@ RUN pip install --no-cache-dir motor
 | Symptom | Cause & fix |
 |---|---|
 | `Can't parse entities: character '.' is reserved` | Fixed in v1.3 — update to the latest image. All MarkdownV2 text is now lint-tested. |
+| Next / Previous buttons do nothing | Fixed in v1.4 — the browser callbacks were never registered. Pull the latest image (`docker compose pull && docker compose up -d`). |
+| Old users have no degrees/documents after the v1.4 update | Normal — the columns default to empty. Send them `/edit` → Degrees / Documents, or they can tick them from `/start`. |
 | `Conflict: terminated by other getUpdates request` | Two instances share the token. Stop the duplicate (cloud service, Termux, old container). |
 | `/start` shows an error but scraping works | Redeploy latest commit; the welcome caption bug is fixed and the banner now falls back to text. |
-| `original` / `original-jina` sources show ❌ in `/sources` | Expected on cloud IPs (CloudFront). The `mirror` source ✅ is the primary and the bot works normally. |
+| `original` / `original-jina` show 🟡 *standby* in `/sources` | Expected on cloud IPs (CloudFront blocks datacenter ranges). They are **fallbacks**: the `mirror` source ✅ is primary and the bot works normally. Only a ❌ on `mirror` means a real problem. |
 | PyPI `ReadTimeoutError` while building | The Dockerfile retries 5× with a 120 s timeout; rebuild once, or set `PIP_INDEX_URL` to a regional mirror. |
 | Bot stops when Termux is swiped away | Run `termux-wake-lock`, disable Android battery optimisation, use the Termux:Boot script. |
 | Data lost after cloud redeploy | SQLite is file-based; attach a volume at `/app/data`, or switch to MongoDB. |

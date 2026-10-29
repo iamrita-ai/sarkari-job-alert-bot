@@ -52,7 +52,7 @@ async def _post_init(app: Application) -> None:
     await app.bot.set_my_commands([
         BotCommand("start", "Create / view your job profile"),
         BotCommand("profile", "Show your saved preferences"),
-        BotCommand("edit", "Update your profile & preferences"),
+        BotCommand("edit", "Edit name, DOB, category, degrees, documents, sectors"),
         BotCommand("latest", "Browse matching jobs (Next / Previous)"),
         BotCommand("saved", "Your bookmarked jobs & reminders"),
         BotCommand("pause", "Pause job alerts"),

@@ -121,6 +121,13 @@ class Database:
             await self._db.execute("ALTER TABLE users ADD COLUMN dob TEXT")
             await self._db.commit()
             logger.info("Migration: added users.dob column")
+        for column in ("degrees", "documents"):
+            if column not in columns:
+                await self._db.execute(
+                    f"ALTER TABLE users ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'"
+                )
+                await self._db.commit()
+                logger.info("Migration: added users.%s column", column)
 
     # -------------------------------------------------------------------- meta
     async def get_meta(self, key: str, default: str | None = None) -> str | None:
@@ -158,16 +165,23 @@ class Database:
         qualification: str,
         sectors: list[str],
         dob: str | None,
+        degrees: list[str] | None = None,
+        documents: list[str] | None = None,
     ) -> UserProfile:
         assert self._db is not None
         now = _utcnow()
         existing = await self.get_user(user_id)
         created = existing.created_at if existing else now
+        if degrees is None:
+            degrees = existing.degrees if existing else []
+        if documents is None:
+            documents = existing.documents if existing else []
         await self._db.execute(
             """
             INSERT INTO users (user_id, username, full_name, category,
-                               qualification, sectors, dob, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                               qualification, sectors, dob, degrees, documents,
+                               active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 username=excluded.username,
                 full_name=excluded.full_name,
@@ -175,16 +189,50 @@ class Database:
                 qualification=excluded.qualification,
                 sectors=excluded.sectors,
                 dob=excluded.dob,
+                degrees=excluded.degrees,
+                documents=excluded.documents,
                 active=1,
                 updated_at=excluded.updated_at
             """,
             (user_id, username, full_name, category, qualification,
-             json.dumps(sectors), dob, created, now),
+             json.dumps(sectors), dob, json.dumps(degrees), json.dumps(documents),
+             created, now),
         )
         await self._db.commit()
         profile = await self.get_user(user_id)
         assert profile is not None
         return profile
+
+    async def update_user(self, user_id: int, **fields) -> UserProfile | None:
+        """Partial profile update used by the /edit menu."""
+        assert self._db is not None
+        allowed = {
+            "full_name": lambda v: str(v),
+            "category": lambda v: str(v),
+            "qualification": lambda v: str(v),
+            "dob": lambda v: v,
+            "sectors": lambda v: json.dumps(list(v)),
+            "degrees": lambda v: json.dumps(list(v)),
+            "documents": lambda v: json.dumps(list(v)),
+            "username": lambda v: v,
+        }
+        sets: list[str] = []
+        values: list = []
+        for key, value in fields.items():
+            if key not in allowed or value is None:
+                continue
+            sets.append(f"{key} = ?")
+            values.append(allowed[key](value))
+        if not sets:
+            return await self.get_user(user_id)
+        sets.append("updated_at = ?")
+        values.append(_utcnow())
+        values.append(user_id)
+        await self._db.execute(
+            f"UPDATE users SET {', '.join(sets)} WHERE user_id = ?", values
+        )
+        await self._db.commit()
+        return await self.get_user(user_id)
 
     async def set_active(self, user_id: int, active: bool) -> None:
         assert self._db is not None
@@ -436,6 +484,7 @@ class Database:
     # ---------------------------------------------------------------- helpers
     @staticmethod
     def _row_to_profile(row: aiosqlite.Row) -> UserProfile:
+        keys = row.keys()
         return UserProfile(
             user_id=row["user_id"],
             username=row["username"],
@@ -443,10 +492,12 @@ class Database:
             category=row["category"],
             qualification=row["qualification"],
             sectors=json.loads(row["sectors"]),
-            dob=row["dob"] if "dob" in row.keys() else None,
+            dob=row["dob"] if "dob" in keys else None,
             active=bool(row["active"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            degrees=json.loads(row["degrees"]) if "degrees" in keys else [],
+            documents=json.loads(row["documents"]) if "documents" in keys else [],
         )
 
     @staticmethod

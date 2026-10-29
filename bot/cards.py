@@ -2,20 +2,43 @@
 
 Rule of thumb: every dynamic value passes through ``md_escape``; static
 template literals use pre-escaped MarkdownV2 punctuation.
+
+The v1.4 card shows the *whole* notification: start date, last date, fee
+payment date, exam date, admit card, result, total posts, selection process,
+application mode, the full qualification text and the documents a candidate
+needs. Long texts are clipped on a safe boundary (never inside an escape
+sequence) and the complete version stays one tap away.
 """
 from __future__ import annotations
 
 from bot import config
-from bot.constants import CATEGORY_AGE_RELAXATION, CATEGORY_MAP, QUAL_MAP
+from bot.constants import (
+    CATEGORY_AGE_RELAXATION,
+    CATEGORY_MAP,
+    DOCUMENT_MAP,
+    QUAL_MAP,
+)
 from bot.models import JobDetail, JobSummary, UserProfile
 from bot.utils import bold, code, link, md_escape
 
 DIVIDER = "━━━━━━━━━━━━━━━━━━"
 NOT_DISCLOSED = "Check official notification"
+TELEGRAM_LIMIT = 4096
+CAPTION_LIMIT = 1024
 
 
 def _value(value: str | None) -> str:
     return md_escape(value) if value and value.strip() else md_escape(NOT_DISCLOSED)
+
+
+def _clip(text: str, limit: int) -> str:
+    """Clip to ``limit`` chars without breaking a MarkdownV2 escape pair."""
+    if len(text) <= limit:
+        return text
+    cut = limit - 1
+    while cut > 0 and text[cut - 1] == "\\":
+        cut -= 1
+    return text[:cut].rstrip() + "…"
 
 
 def _age_line(detail: JobDetail, profile: UserProfile, age_info: dict | None) -> str:
@@ -37,6 +60,57 @@ def _age_line(detail: JobDetail, profile: UserProfile, age_info: dict | None) ->
     return line
 
 
+def _dates_block(detail: JobDetail) -> list[str]:
+    rows = [
+        ("🟢 Apply Online Start Date", detail.apply_start_date),
+        ("🔴 Apply Online Last Date", detail.apply_last_date),
+        ("💳 Fee Payment Last Date", detail.fee_last_date),
+        ("✏️ Correction Date", detail.correction_date),
+        ("📝 Exam Date", detail.exam_date),
+        ("🎫 Admit Card", detail.admit_card_date),
+        ("🏁 Result Date", detail.result_date),
+    ]
+    lines = []
+    for label, value in rows:
+        if value and value.strip():
+            lines.append(f"• {bold(label + ':')} {md_escape(value.strip())}")
+    return lines
+
+
+def _documents_block(detail: JobDetail, profile: UserProfile | None) -> list[str]:
+    required = detail.documents_required or []
+    if not required:
+        return []
+    owned = set(profile.documents) if profile else set()
+    lines = [f"📎 {bold('Documents Needed:')}"]
+    for key in required:
+        label = DOCUMENT_MAP.get(key, {}).get("label", key)
+        if not profile:
+            lines.append(f"• {md_escape(label)}")
+        elif key in owned:
+            lines.append(f"• ✅ {md_escape(label)}")
+        else:
+            lines.append(f"• ❌ {md_escape(label)} \\(not in your profile\\)")
+    return lines
+
+
+def _assemble(top: list[str], middle: list[str], bottom: list[str],
+              limit: int) -> str:
+    """Join the three card zones, clipping the *middle* (the long
+    qualification text) so the tail - apply links, PDF, credits - can never
+    be pushed out by Telegram's message limit."""
+    top_text = "\n".join(top)
+    bottom_text = "\n".join(bottom)
+    middle_text = "\n".join(middle)
+    allowance = limit - len(top_text) - len(bottom_text) - 2
+    if allowance < 30:
+        middle_text = ""
+    elif len(middle_text) > allowance:
+        middle_text = _clip(middle_text, allowance)
+    parts = [part for part in (top_text, middle_text, bottom_text) if part]
+    return "\n".join(parts)
+
+
 def job_card(
     job: JobSummary,
     detail: JobDetail | None,
@@ -45,27 +119,97 @@ def job_card(
 ) -> str:
     """Full MarkdownV2 card for a text message (up to 4096 chars)."""
     detail = detail or JobDetail()
-    lines = [
+    top = [
         "🔔 *NEW SARKARI JOB MATCH*",
         DIVIDER,
         f"📝 {link(job.title, job.url)}",
     ]
     if detail.organization:
-        lines.append(f"🏢 {bold('Organisation:')} {md_escape(detail.organization)}")
-    lines.append(f"🎓 {bold('Qualification:')} {_value(detail.eligibility)}")
-    lines.append(f"💰 {bold('Salary / Pay:')} {_value(detail.salary)}")
-    lines.append(f"💳 {bold('Application Fee:')} {_value(detail.fee)}")
-    lines.append(_age_line(detail, profile, age_info))
-    if job.last_date:
-        lines.append(f"⏳ {bold('Apply Before:')} {code(job.last_date)}")
-    lines.append(DIVIDER)
+        top.append(f"🏢 {bold('Organisation:')} {md_escape(detail.organization)}")
+    if detail.exam_name and detail.exam_name != detail.organization:
+        top.append(f"🗂 {bold('Exam:')} {md_escape(detail.exam_name)}")
+    if detail.post_date:
+        top.append(f"📅 {bold('Notification Date:')} {md_escape(detail.post_date)}")
+    if detail.total_posts:
+        top.append(f"👥 {bold('Total Posts:')} {md_escape(detail.total_posts)}")
+    if detail.selection_process:
+        top.append(
+            f"🧭 {bold('Selection Process:')} {md_escape(detail.selection_process)}"
+        )
+    if detail.application_mode:
+        top.append(f"💻 {bold('Apply Mode:')} {md_escape(detail.application_mode)}")
 
+    date_lines = _dates_block(detail)
+    if date_lines:
+        top.append("")
+        top.append(f"🗓 {bold('Important Dates')}")
+        top.extend(date_lines)
+
+    # --- qualification (full text, exactly as published) ------------------
+    middle: list[str] = []
+    qualification = detail.qualification or detail.eligibility
+    if qualification:
+        middle.append("")
+        middle.append(f"🎓 {bold('Qualification:')}")
+        middle.append(md_escape(qualification.strip()))
+
+    bottom: list[str] = []
+    if detail.salary:
+        bottom.append(f"💰 {bold('Salary / Pay:')} {md_escape(detail.salary)}")
+    if detail.fee:
+        bottom.append(f"💳 {bold('Application Fee:')} {md_escape(detail.fee)}")
+    bottom.append(_age_line(detail, profile, age_info))
+
+    doc_lines = _documents_block(detail, profile)
+    if doc_lines:
+        bottom.append("")
+        bottom.extend(doc_lines)
+
+    bottom.append(DIVIDER)
     if detail.apply_url:
-        lines.append(f"👉 {link('CLICK HERE TO FILL FORM', detail.apply_url)}")
+        bottom.append(f"👉 {link('CLICK HERE TO FILL THE FORM', detail.apply_url)}")
     detail_links = [link("🌐 Full Details", job.url)]
     if detail.notification_pdf:
         detail_links.append(link("📄 Notification PDF", detail.notification_pdf))
-    lines.append("  ·  ".join(detail_links))
+    if detail.official_site:
+        detail_links.append(link("🏛 Official Website", detail.official_site))
+    if detail.short_notice:
+        detail_links.append(link("📰 Short Notice", detail.short_notice))
+    bottom.append("  ·  ".join(detail_links))
+    bottom.append(DIVIDER)
+    bottom.append(f"🤖 Managed by {md_escape(config.OWNER_HANDLES)}")
+    return _assemble(top, middle, bottom, TELEGRAM_LIMIT)
+
+
+def full_detail_text(job: JobSummary, detail: JobDetail | None) -> str:
+    """The complete notification text - sent in chunks by the 'Full
+    Notification' button so nothing is lost to the 4096 char limit."""
+    detail = detail or JobDetail()
+    lines = [
+        f"📄 *Full Notification — {md_escape(job.title)}*",
+        DIVIDER,
+        f"🔗 {link('Open the page', job.url)}",
+    ]
+    if detail.qualification or detail.eligibility:
+        lines.append("")
+        lines.append(f"🎓 {bold('Qualification (full text)')}")
+        lines.append(md_escape((detail.qualification or detail.eligibility).strip()))
+    if detail.important_dates:
+        lines.append("")
+        lines.append(f"🗓 {bold('Important Dates (as published)')}")
+        lines.append(md_escape(detail.important_dates))
+    if detail.how_to_apply:
+        lines.append("")
+        lines.append(f"📝 {bold('How To Apply')}")
+        lines.append(md_escape(detail.how_to_apply))
+    if detail.age_limit:
+        lines.append("")
+        lines.append(f"📆 {bold('Age Limit:')} {md_escape(detail.age_limit)}")
+    if detail.documents_required:
+        labels = [
+            DOCUMENT_MAP.get(k, {}).get("label", k) for k in detail.documents_required
+        ]
+        lines.append(f"📎 {bold('Documents Needed:')} {md_escape(', '.join(labels))}")
     lines.append(DIVIDER)
     lines.append(f"🤖 Managed by {md_escape(config.OWNER_HANDLES)}")
     return "\n".join(lines)
@@ -79,26 +223,34 @@ def photo_caption(
 ) -> str:
     """Compact MarkdownV2 caption - Telegram photo captions are capped at 1024."""
     detail = detail or JobDetail()
-    lines = [
+    top = [
         "🔔 *NEW SARKARI JOB MATCH*",
         f"📝 {link(job.title, job.url)}",
     ]
     if detail.organization:
-        lines.append(f"🏢 {md_escape(detail.organization)}")
-    lines.append(f"🎓 {bold('Eligibility:')} {_value(detail.eligibility)}")
+        top.append(f"🏢 {md_escape(detail.organization)}")
+    if detail.total_posts:
+        top.append(f"👥 {md_escape(detail.total_posts)}")
+    if detail.apply_start_date:
+        top.append(f"🟢 {bold('Start:')} {md_escape(detail.apply_start_date)}")
+    if detail.apply_last_date or job.last_date:
+        top.append(
+            f"🔴 {bold('Last Date:')} "
+            f"{md_escape(detail.apply_last_date or job.last_date or '')}"
+        )
+    middle: list[str] = []
+    qualification = detail.qualification or detail.eligibility
+    if qualification:
+        middle.append(f"🎓 {bold('Qualification:')} {md_escape(qualification)}")
+    bottom: list[str] = []
     if detail.fee:
-        lines.append(f"💳 {bold('Fee:')} {md_escape(detail.fee)}")
+        bottom.append(f"💳 {bold('Fee:')} {md_escape(detail.fee)}")
     if detail.salary:
-        lines.append(f"💰 {bold('Salary:')} {md_escape(detail.salary)}")
-    lines.append(_age_line(detail, profile, age_info))
-    if job.last_date:
-        lines.append(f"⏳ {bold('Last Date:')} {code(job.last_date)}")
+        bottom.append(f"💰 {bold('Salary:')} {md_escape(detail.salary)}")
+    bottom.append(_age_line(detail, profile, age_info))
     if detail.apply_url:
-        lines.append(f"👉 {link('CLICK HERE TO FILL FORM', detail.apply_url)}")
-    text = "\n".join(lines)
-    if len(text) > 1024:  # defensive: drop the longest optional line
-        text = "\n".join(lines[:-2])
-    return text[:1024]
+        bottom.append(f"👉 {link('CLICK HERE TO FILL THE FORM', detail.apply_url)}")
+    return _assemble(top, middle, bottom, CAPTION_LIMIT)
 
 
 def profile_card(profile: UserProfile) -> str:
@@ -110,16 +262,52 @@ def profile_card(profile: UserProfile) -> str:
     dob_line = md_escape(profile.dob or "Not set")
     if age is not None:
         dob_line += f" \\({age} Yrs\\)"
+    degrees = (
+        "\n".join(f"  • {md_escape(label)}" for label in profile.degree_labels)
+        or "  • Not set"
+    )
+    documents = (
+        "\n".join(f"  • {md_escape(label)}" for label in profile.document_labels)
+        or "  • Not set"
+    )
     return (
         "👤 *Your Job Profile*\n"
         f"{DIVIDER}\n"
         f"🧑‍💼 {bold('Name:')} {md_escape(profile.full_name)}\n"
         f"🎂 {bold('D.O.B:')} {dob_line}\n"
         f"🏷️ {bold('Category:')} {md_escape(CATEGORY_MAP.get(profile.category, profile.category))}\n"
-        f"🎓 {bold('Qualification:')} {md_escape(QUAL_MAP[profile.qualification]['label'])}\n"
+        f"🎓 {bold('Highest Qualification:')} {md_escape(QUAL_MAP[profile.qualification]['label'])}\n"
+        f"📚 {bold('Degrees You Hold:')}\n{degrees}\n"
+        f"📎 {bold('Documents You Have:')}\n{documents}\n"
         f"📂 {bold('Job Preferences:')}\n{sectors}\n"
         f"{DIVIDER}\n"
         f"🔔 {bold('Alerts:')} {status}"
+    )
+
+
+def admin_user_card(profile: UserProfile, saved_count: int = 0,
+                    extra: str = "") -> str:
+    """Owner-facing view of a subscriber's profile."""
+    status = "🟢 Active" if profile.active else "🔴 Paused"
+    degrees = ", ".join(profile.degree_labels) or "—"
+    documents = ", ".join(profile.document_labels) or "—"
+    sectors = ", ".join(profile.sector_labels) or "—"
+    return (
+        "👤 *Subscriber Profile*\n"
+        f"{DIVIDER}\n"
+        f"🧑‍💼 {bold('Name:')} {md_escape(profile.full_name)}\n"
+        f"🔗 {bold('Username:')} @{md_escape(profile.username or '—')}\n"
+        f"🆔 {bold('User ID:')} `{profile.user_id}`\n"
+        f"🎂 {bold('D.O.B:')} {md_escape(profile.dob or 'Not set')}\n"
+        f"🏷️ {bold('Category:')} {md_escape(CATEGORY_MAP.get(profile.category, profile.category))}\n"
+        f"🎓 {bold('Highest Qual:')} {md_escape(QUAL_MAP[profile.qualification]['label'])}\n"
+        f"📚 {bold('Degrees:')} {md_escape(degrees)}\n"
+        f"📎 {bold('Documents:')} {md_escape(documents)}\n"
+        f"📂 {bold('Sectors:')} {md_escape(sectors)}\n"
+        f"🔖 {bold('Saved Jobs:')} {saved_count}\n"
+        f"🔔 {bold('Alerts:')} {status}\n"
+        + (f"{extra}\n" if extra else "")
+        + f"{DIVIDER}"
     )
 
 
@@ -180,8 +368,8 @@ def welcome_caption() -> str:
         f"{DIVIDER}\n"
         "I watch Sarkari Result around the clock and message you the moment a "
         "government job matches your profile\\.\n\n"
-        "Tap the button below to create your profile in 5 quick steps "
-        "\\(name, D\\.O\\.B, category, qualification, job choices\\)\\."
+        "Tap the button below to create your profile in 6 quick steps "
+        "\\(name, D\\.O\\.B, category, degrees, documents, job choices\\)\\."
     )
 
 
@@ -190,12 +378,12 @@ def help_text() -> str:
         "ℹ️ *How to use this bot*\n"
         f"{DIVIDER}\n"
         "1\\. /start — create your profile: name, D\\.O\\.B, category, "
-        "qualification and job sectors\n"
+        "degrees, documents and job sectors\n"
         "2\\. The bot scans Sarkari Result automatically and sends a rich card "
         "the moment a vacancy matches your qualification *and age*\n"
         "3\\. Commands:\n"
         "   • /profile — view saved preferences\n"
-        "   • /edit — update your profile\n"
+        "   • /edit — update any part of your profile\n"
         "   • /latest — browse matching jobs with Next / Previous\n"
         "   • /saved — your bookmarked jobs & reminders\n"
         "   • /pause — stop notifications temporarily\n"
@@ -213,9 +401,9 @@ def about_text() -> str:
         "📢 *Sarkari Job Alert Bot*\n"
         f"{DIVIDER}\n"
         "Scrapes the latest government vacancy listings and pushes personalised "
-        "Telegram alerts based on your category, age, qualification and preferred "
-        "job sectors\\.\n\n"
-        "⚙️ Python · python\\-telegram\\-bot v22 · BeautifulSoup · SQLite\n"
+        "Telegram alerts based on your category, age, degrees, documents and "
+        "preferred job sectors\\.\n\n"
+        "⚙️ Python · python\\-telegram\\-bot v22 · BeautifulSoup · SQLite / MongoDB\n"
         "🔄 Automatic checks around the clock · image alerts · reminders\n\n"
         "👑 *Bot Owners*\n"
         "• @TechnicalSerena\n"

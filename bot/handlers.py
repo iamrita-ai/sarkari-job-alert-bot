@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from telegram import Update
@@ -18,34 +19,48 @@ from telegram.ext import (
 )
 
 from bot import config, matcher
-from bot.browser import open_browser
+from bot.browser import browser_callback, open_browser
 from bot.cards import (
     about_text,
+    admin_user_card,
+    full_detail_text,
     help_text,
     profile_card,
     welcome_caption,
 )
 from bot.constants import (
-    S_CATEGORY,
     CATEGORY_MAP,
-    S_DOB,
-    S_NAME,
-    S_QUALIFICATION,
+    DEGREE_MAP,
+    DEGREE_KEYS,
+    DOCUMENT_KEYS,
     QUAL_MAP,
+    S_CATEGORY,
+    S_DEGREES,
+    S_DOB,
+    S_DOCUMENTS,
+    S_EDIT_MENU,
+    S_NAME,
     S_SECTORS,
     SECTOR_KEYS,
 )
 from bot.keyboards import (
+    admin_profile_keyboard,
+    admin_users_keyboard,
     category_keyboard,
+    degrees_keyboard,
+    documents_keyboard,
     get_started_keyboard,
     main_menu_keyboard,
-    qualification_keyboard,
+    profile_edit_keyboard,
     sectors_keyboard,
 )
 from bot.scraper import ScraperError
 from bot.utils import decode_job_id, md_escape, parse_dob
 
 logger = logging.getLogger(__name__)
+
+# Number of subscribers shown per page in the owner /users browser
+ADMIN_USERS_PAGE = 10
 
 
 # --------------------------------------------------------------------- utils
@@ -60,6 +75,34 @@ def _scraper(context: ContextTypes.DEFAULT_TYPE):
 def _is_owner(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.username and user.username.lower() in config.OWNER_USERNAMES)
+
+
+def _draft(context: ContextTypes.DEFAULT_TYPE) -> dict:
+    draft = context.user_data.setdefault("draft", {})
+    draft.setdefault("sectors", set())
+    draft.setdefault("degrees", set())
+    draft.setdefault("documents", set())
+    return draft
+
+
+def _editing(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    return bool(context.user_data.get("editing"))
+
+
+def _derive_qualification(degrees: set[str]) -> str | None:
+    """Highest qualification implied by the degrees the user selected."""
+    best_rank = -1
+    best_key: str | None = None
+    for key in degrees:
+        degree = DEGREE_MAP.get(key)
+        if not degree or key == "other":
+            continue
+        qual_key = degree["qual_key"]
+        rank = QUAL_MAP[qual_key]["rank"]
+        if rank > best_rank:
+            best_rank = rank
+            best_key = qual_key
+    return best_key
 
 
 async def track_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -93,10 +136,10 @@ async def _show_deep_linked_job(update: Update, context: ContextTypes.DEFAULT_TY
     job_id = decode_job_id(payload[1:])
     if not job_id:
         return False
-    job = await _db(context).get_job(job_id)
+    db = _db(context)
+    job = await db.get_job(job_id)
     if job is None:
         return False
-    db = _db(context)
     profile = await db.get_user(update.effective_user.id)
     detail = await db.get_job_detail(job_id)
     age_info = None
@@ -142,29 +185,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def begin_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    context.user_data["draft"] = {"sectors": set()}
+    context.user_data["draft"] = {
+        "sectors": set(), "degrees": set(), "documents": set(),
+    }
+    context.user_data.pop("editing", None)
     await query.message.reply_markdown_v2(
-        "Step 1️⃣/5 — Type your *full name* now:"
+        "Step 1️⃣/6 — Type your *full name* now:"
     )
     return S_NAME
+
+
+async def _show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    profile = await _db(context).get_user(update.effective_user.id)
+    message = update.effective_message
+    if profile:
+        text = profile_card(profile)
+    else:
+        text = "You don't have a profile yet\\. Send /start to create one\\."
+    if message is not None:
+        await message.reply_markdown_v2(
+            text, reply_markup=profile_edit_keyboard(),
+            disable_web_page_preview=True,
+        )
+    return S_EDIT_MENU
 
 
 async def edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     profile = await _db(context).get_user(update.effective_user.id)
-    draft = {"sectors": set(profile.sectors) if profile else set()}
-    if profile:
-        draft.update(
-            full_name=profile.full_name,
-            dob=profile.dob,
-            category=profile.category,
-            qualification=profile.qualification,
+    if not profile:
+        await update.message.reply_text(
+            "You don't have a profile yet. Send /start to create one."
         )
+        return ConversationHandler.END
+    draft = {
+        "sectors": set(profile.sectors),
+        "degrees": set(profile.degrees),
+        "documents": set(profile.documents),
+    }
     context.user_data["draft"] = draft
-    current = f" Current name: *{md_escape(profile.full_name)}*\\." if profile else ""
-    await update.message.reply_markdown_v2(
-        f"✏️ Updating your profile\\.{current}\n\nStep 1️⃣/5 — Type your *full name*:"
-    )
-    return S_NAME
+    context.user_data["editing"] = True
+    return await _show_edit_menu(update, context)
 
 
 async def name_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -174,10 +234,15 @@ async def name_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "⚠️ Please send a valid name between 2 and 64 characters."
         )
         return S_NAME
-    context.user_data["draft"]["full_name"] = name
+    draft = _draft(context)
+    draft["full_name"] = name
+    if _editing(context):
+        await _db(context).update_user(update.effective_user.id, full_name=name)
+        await update.message.reply_markdown_v2("✅ Name updated\\.")
+        return await _show_edit_menu(update, context)
     await update.message.reply_markdown_v2(
         f"Thanks, *{md_escape(name)}* 🙂\n\n"
-        "Step 2️⃣/5 — Type your *date of birth* as `DD/MM/YYYY` "
+        "Step 2️⃣/6 — Type your *date of birth* as `DD/MM/YYYY` "
         "\\(used to check age limits with your category relaxation\\):"
     )
     return S_DOB
@@ -192,10 +257,17 @@ async def dob_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return S_DOB
     from bot.utils import dob_to_storage, calculate_age
     stored = dob_to_storage(dob)
-    context.user_data["draft"]["dob"] = stored
+    draft = _draft(context)
+    draft["dob"] = stored
+    if _editing(context):
+        await _db(context).update_user(update.effective_user.id, dob=stored)
+        await update.message.reply_markdown_v2(
+            f"✅ Date of birth updated to `{stored}` \\(age {calculate_age(stored)} Yrs\\)\\."
+        )
+        return await _show_edit_menu(update, context)
     await update.message.reply_markdown_v2(
         f"🎂 Recorded: `{stored}` \\(age {calculate_age(stored)} Yrs\\)\n\n"
-        "Step 3️⃣/5 — Choose your *reservation category*:",
+        "Step 3️⃣/6 — Choose your *reservation category*:",
         reply_markup=category_keyboard(),
     )
     return S_CATEGORY
@@ -207,30 +279,88 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if key not in CATEGORY_MAP:
         await query.answer()
         return S_CATEGORY
-    context.user_data["draft"]["category"] = key
+    draft = _draft(context)
+    draft["category"] = key
     await query.answer()
+    if _editing(context):
+        await _db(context).update_user(query.from_user.id, category=key)
+        await query.message.reply_markdown_v2(
+            f"✅ Category updated to *{md_escape(CATEGORY_MAP[key])}*\\."
+        )
+        return await _show_edit_menu(update, context)
     await query.edit_message_text(
-        "Step 4️⃣/5 — Choose your *highest qualification* "
-        "\\(you automatically qualify for jobs asking for a lower one\\):",
+        "Step 4️⃣/6 — Tick *every degree* you hold "
+        "\\(you can pick several — ITI + B\\.Ed, B\\.Sc + M\\.Com\\, …\\):",
         parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=qualification_keyboard(),
+        reply_markup=degrees_keyboard(draft.get("degrees", set())),
     )
-    return S_QUALIFICATION
+    return S_DEGREES
 
 
-async def qualification_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def degree_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     key = query.data.split(":", 1)[1]
-    if key not in QUAL_MAP:
+    draft = _draft(context)
+    selected: set[str] = draft.setdefault("degrees", set())
+
+    if key != "done":
+        if key not in DEGREE_KEYS:
+            await query.answer()
+            return S_DEGREES
+        selected.symmetric_difference_update({key})
         await query.answer()
-        return S_QUALIFICATION
-    context.user_data["draft"]["qualification"] = key
-    await query.answer()
+        await query.edit_message_reply_markup(reply_markup=degrees_keyboard(selected))
+        return S_DEGREES
+
+    if not selected:
+        await query.answer("Please pick at least one degree 🙂", show_alert=True)
+        return S_DEGREES
+
+    await query.answer("Degrees saved ✅")
+    if _editing(context):
+        await _db(context).update_user(query.from_user.id, degrees=sorted(selected))
+        await query.message.reply_markdown_v2(
+            f"✅ Degrees updated — {len(selected)} selected\\."
+        )
+        return await _show_edit_menu(update, context)
+
     await query.edit_message_text(
-        "Step 5️⃣/5 — Tick the *job sectors* you want alerts for "
+        "Step 5️⃣/6 — Tick the *documents* you already have "
+        "\\(we use them to tell you exactly what a vacancy asks for\\):",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=documents_keyboard(draft.get("documents", set())),
+    )
+    return S_DOCUMENTS
+
+
+async def document_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    key = query.data.split(":", 1)[1]
+    draft = _draft(context)
+    selected: set[str] = draft.setdefault("documents", set())
+
+    if key != "done":
+        if key not in DOCUMENT_KEYS:
+            await query.answer()
+            return S_DOCUMENTS
+        selected.symmetric_difference_update({key})
+        await query.answer()
+        await query.edit_message_reply_markup(reply_markup=documents_keyboard(selected))
+        return S_DOCUMENTS
+
+    await query.answer("Documents saved ✅")
+    if _editing(context):
+        await _db(context).update_user(query.from_user.id, documents=sorted(selected))
+        await query.message.reply_markdown_v2(
+            f"✅ Documents updated — {len(selected)} selected\\."
+        )
+        return await _show_edit_menu(update, context)
+
+    await query.edit_message_text(
+        "Step 6️⃣/6 — Tick the *job sectors* you want alerts for "
         "\\(select several\\), then press *Done*:",
         parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=sectors_keyboard(context.user_data["draft"].get("sectors", set())),
+        reply_markup=sectors_keyboard(draft.get("sectors", set())),
     )
     return S_SECTORS
 
@@ -238,7 +368,7 @@ async def qualification_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
 async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     key = query.data.split(":", 1)[1]
-    draft = context.user_data["draft"]
+    draft = _draft(context)
     selected: set[str] = draft.setdefault("sectors", set())
 
     if key != "done":
@@ -254,18 +384,33 @@ async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await query.answer("Please pick at least one sector 🙂", show_alert=True)
         return S_SECTORS
 
+    await query.answer("Profile saved ✅")
     tg_user = update.effective_user
-    profile = await _db(context).upsert_user(
+    db = _db(context)
+    degrees = draft.get("degrees", set())
+    if _editing(context):
+        await db.update_user(tg_user.id, sectors=sorted(selected))
+        profile = await db.get_user(tg_user.id)
+        await query.message.reply_markdown_v2(
+            f"✅ Job preferences updated\\.\n\n{profile_card(profile)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            disable_web_page_preview=True,
+        )
+        return await _show_edit_menu(update, context)
+
+    profile = await db.upsert_user(
         user_id=tg_user.id,
         username=tg_user.username,
         full_name=draft["full_name"],
         category=draft["category"],
-        qualification=draft["qualification"],
+        qualification=_derive_qualification(degrees) or "graduate",
         sectors=sorted(selected),
         dob=draft.get("dob"),
+        degrees=sorted(degrees),
+        documents=sorted(draft.get("documents", set())),
     )
     context.user_data.pop("draft", None)
-    await query.answer("Profile saved ✅")
+    context.user_data.pop("editing", None)
     await query.edit_message_text(
         f"✅ *Profile saved successfully\\!*\n\n{profile_card(profile)}",
         parse_mode=ParseMode.MARKDOWN_V2,
@@ -280,8 +425,62 @@ async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 
+async def profile_edit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Buttons of the /edit menu."""
+    query = update.callback_query
+    action = query.data.split(":", 1)[1]
+    await query.answer()
+    draft = _draft(context)
+
+    if action == "close":
+        profile = await _db(context).get_user(query.from_user.id)
+        if profile:
+            await query.message.reply_markdown_v2(
+                profile_card(profile),
+                reply_markup=main_menu_keyboard(profile.active),
+                disable_web_page_preview=True,
+            )
+        return ConversationHandler.END
+    if action == "name":
+        await query.message.reply_markdown_v2(
+            "✏️ Send your *full name* now:"
+        )
+        return S_NAME
+    if action == "dob":
+        await query.message.reply_markdown_v2(
+            "🎂 Send your *date of birth* as `DD/MM/YYYY`:"
+        )
+        return S_DOB
+    if action == "category":
+        await query.message.reply_markdown_v2(
+            "🏷️ Choose your *reservation category*:",
+            reply_markup=category_keyboard(),
+        )
+        return S_CATEGORY
+    if action == "degrees":
+        await query.message.reply_markdown_v2(
+            "📚 Tick *every degree* you hold, then press *Done*:",
+            reply_markup=degrees_keyboard(draft.get("degrees", set())),
+        )
+        return S_DEGREES
+    if action == "documents":
+        await query.message.reply_markdown_v2(
+            "📎 Tick the *documents* you own, then press *Done*:",
+            reply_markup=documents_keyboard(draft.get("documents", set())),
+        )
+        return S_DOCUMENTS
+    if action == "sectors":
+        await query.message.reply_markdown_v2(
+            "📂 Tick the *job sectors* you want, then press *Done*:",
+            reply_markup=sectors_keyboard(draft.get("sectors", set())),
+        )
+        return S_SECTORS
+    return S_EDIT_MENU
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("draft", None)
+    context.user_data.pop("editing", None)
     await update.message.reply_text(
         "Setup cancelled. Send /start whenever you want to try again."
     )
@@ -344,23 +543,7 @@ async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ------------------------------------------------------------------ menu taps
 async def menu_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    profile = await _db(context).get_user(query.from_user.id)
-    draft = {"sectors": set(profile.sectors) if profile else set()}
-    if profile:
-        draft.update(
-            full_name=profile.full_name,
-            dob=profile.dob,
-            category=profile.category,
-            qualification=profile.qualification,
-        )
-    context.user_data["draft"] = draft
-    current = f" Current name: *{md_escape(profile.full_name)}*\\." if profile else ""
-    await query.message.reply_markdown_v2(
-        f"✏️ Updating your profile\\.{current}\n\nStep 1️⃣/5 — Type your *full name*:"
-    )
-    return S_NAME
+    return await edit_profile(update, context)
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -417,6 +600,61 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             update, context, profile.user_id, matched,
             kind="latest", heading="Latest Matching Jobs",
         )
+
+
+async def full_text_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """'Full Notification Text' - sends the complete notice in safe chunks."""
+    query = update.callback_query
+    job_id = decode_job_id(query.data.split(":", 1)[1])
+    if not job_id:
+        await query.answer("Invalid button.", show_alert=True)
+        return
+    db = _db(context)
+    job = await db.get_job(job_id)
+    if job is None:
+        await query.answer("Job no longer exists.", show_alert=True)
+        return
+    detail = await db.get_job_detail(job_id)
+    await query.answer()
+    text = full_detail_text(job, detail)
+    for chunk in _split_for_telegram(text):
+        await query.message.reply_markdown_v2(
+            chunk, disable_web_page_preview=True,
+        )
+
+
+def _split_for_telegram(text: str, limit: int = 3900) -> list[str]:
+    """Split long text at line boundaries (never inside a MarkdownV2 escape).
+
+    A single oversized line (a long qualification paragraph) is hard-split on
+    a safe boundary so no chunk can exceed the Telegram limit.
+    """
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        pieces = [line]
+        if len(line) > limit:
+            pieces = []
+            rest = line
+            while len(rest) > limit:
+                cut = limit
+                while cut > 0 and rest[cut - 1] == "\\":
+                    cut -= 1
+                pieces.append(rest[:cut])
+                rest = rest[cut:]
+            pieces.append(rest)
+        for piece in pieces:
+            if size + len(piece) + 1 > limit and current:
+                chunks.append("\n".join(current))
+                current, size = [], 0
+            current.append(piece)
+            size += len(piece) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -493,19 +731,193 @@ async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     status = await update.message.reply_text("🩺 Probing every data source…")
     report = await _scraper(context).source_healthcheck()
+    text = format_sources_report(report, _scraper(context).status)
+    await status.edit_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+
+
+def format_sources_report(report: list[dict], scraper_status: dict) -> str:
+    """Render the /sources health report.
+
+    A failing *fallback* source is not an error - the bot only needs one
+    working source, and the mirror is the primary one.
+    """
+    primary = config.SOURCE_ORDER[0] if config.SOURCE_ORDER else "mirror"
     lines = ["🩺 *Data\\-source health*", "━━━━━━━━━━━━━━━━━━"]
+    primary_ok = False
     for entry in report:
+        source = md_escape(entry["source"])
         if entry["ok"]:
-            lines.append(f"✅ *{md_escape(entry['source'])}* — {entry['jobs']} jobs")
+            if entry["source"] == primary:
+                primary_ok = True
+                lines.append(f"✅ *{source}* — {entry['jobs']} jobs · primary")
+            else:
+                lines.append(f"✅ *{source}* — {entry['jobs']} jobs · standby ready")
+        elif entry["source"] == primary:
+            lines.append(f"❌ *{source}* — {md_escape(_short_error(entry['error']))}")
         else:
-            lines.append(f"❌ *{md_escape(entry['source'])}* — {md_escape(entry['error'])}")
-    scraper_status = _scraper(context).status
+            lines.append(
+                f"🟡 *{source}* — standby · {md_escape(_short_error(entry['error']))}"
+            )
     lines.append("━━━━━━━━━━━━━━━━━━")
+    if primary_ok:
+        lines.append(
+            "✅ *Primary source is healthy* — the bot is fully operational\\."
+        )
+    else:
+        lines.append(
+            "⚠️ *Primary source is down* — the bot is using a fallback source\\."
+        )
+    lines.append(
+        "ℹ️ Fallback sources stay on standby and are used automatically if the "
+        "primary one fails\\."
+    )
     lines.append(
         f"Last success: {md_escape(scraper_status.get('last_success_at') or 'never')} "
         f"via {md_escape(scraper_status.get('last_success_source') or '—')}"
     )
-    await status.edit_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
+    return "\n".join(lines)
+
+
+def _short_error(error: str | None) -> str:
+    """Compress a raw scraper error into one readable line."""
+    if not error:
+        return "not reachable"
+    low = error.lower()
+    if "403" in low:
+        return "HTTP 403 (site blocks datacenter IPs)"
+    if "reader proxy" in low or "jina" in low:
+        return "reader proxy blocked"
+    if "zero parseable jobs" in low:
+        return "no parseable jobs returned"
+    if "http" in low:
+        match = re.search(r"HTTP \d{3}", error, re.IGNORECASE)
+        return match.group() if match else error[:60]
+    return error[:70]
+
+
+# ------------------------------------------------------------ owner: /users
+async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner-only list of every subscriber + a jump into their profile."""
+    if not _is_owner(update):
+        await update.message.reply_text("🚫 Owner-only command.")
+        return
+    db = _db(context)
+    users = await db.all_users()
+    if not users:
+        await update.message.reply_text("📭 No subscribers yet.")
+        return
+    context.application.bot_data.setdefault("admin_users", {})[
+        update.effective_user.id
+    ] = {"page": 0}
+    await _render_admin_users(update, context, update.effective_user.id)
+
+
+async def _render_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                               owner_id: int, edit: bool = False) -> None:
+    db = _db(context)
+    users = await db.all_users()
+    total_pages = max(1, -(-len(users) // ADMIN_USERS_PAGE))
+    state = context.application.bot_data.setdefault("admin_users", {}).setdefault(
+        owner_id, {"page": 0}
+    )
+    state["page"] = min(state.get("page", 0), total_pages - 1)
+    page = state["page"]
+    chunk = users[page * ADMIN_USERS_PAGE:(page + 1) * ADMIN_USERS_PAGE]
+    lines = [
+        "👥 *All Subscribers*",
+        f"📄 Page {page + 1} / {total_pages} · {len(users)} total",
+        "👆 Tap a name to open that profile",
+        "━━━━━━━━━━━━━━━━━━",
+    ]
+    for profile in chunk:
+        degrees = ", ".join(profile.degree_labels) or "—"
+        lines.append(
+            f"• *{md_escape(profile.full_name)}*"
+            f"{' @' + md_escape(profile.username) if profile.username else ''}"
+            f" · {md_escape(profile.category)} · {md_escape(degrees)}"
+        )
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    markup = admin_users_keyboard(chunk, page, total_pages)
+    text = "\n".join(lines)
+    if edit and update.callback_query is not None:
+        try:
+            await update.callback_query.edit_message_text(
+                text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+            return
+        except Exception:  # noqa: BLE001 - message not editable -> send a new one
+            pass
+    message = update.effective_message
+    if message is not None:
+        await message.reply_markdown_v2(
+            text, reply_markup=markup, disable_web_page_preview=True,
+        )
+
+
+async def admin_users_callback(update: Update,
+                               context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not _is_owner(update):
+        await query.answer("🚫 Owner-only command.", show_alert=True)
+        return
+    parts = query.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    await query.answer()
+    owner_id = query.from_user.id
+
+    if action == "users":
+        await _render_admin_users(update, context, owner_id, edit=True)
+        return
+
+    if action == "page":
+        page_action = parts[2] if len(parts) > 2 else "noop"
+        if page_action == "noop":
+            return
+        state = context.application.bot_data.setdefault("admin_users", {}).setdefault(
+            owner_id, {"page": 0}
+        )
+        state["page"] = max(0, state.get("page", 0) + (1 if page_action == "n" else -1))
+        await _render_admin_users(update, context, owner_id, edit=True)
+        return
+
+    if action == "prof" and len(parts) > 2:
+        user_id = int(parts[2])
+        db = _db(context)
+        profile = await db.get_user(user_id)
+        if profile is None:
+            await query.message.reply_text("That user no longer exists.")
+            return
+        saved = await db.list_saved(user_id)
+        saved_lines = "\n".join(
+            f"  • {md_escape(item.title[:70])}"
+            for item in saved[:10]
+        ) or "  • none"
+        card = admin_user_card(
+            profile,
+            saved_count=len(saved),
+            extra=f"🔖 *Saved Jobs:*\n{saved_lines}",
+        )
+        await query.message.reply_markdown_v2(
+            card,
+            reply_markup=admin_profile_keyboard(profile, len(saved)),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if action == "saved" and len(parts) > 2:
+        user_id = int(parts[2])
+        saved = await _db(context).list_saved(user_id)
+        if not saved:
+            await query.message.reply_text("That user has no saved jobs.")
+            return
+        lines = ["🔖 *Saved Jobs of this subscriber*", "━━━━━━━━━━━━━━━━━━"]
+        for item in saved[:25]:
+            lines.append(f"• {md_escape(item.title[:80])}")
+        await query.message.reply_markdown_v2(
+            "\n".join(lines), disable_web_page_preview=True,
+        )
+        return
 
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -547,8 +959,10 @@ def register_handlers(app: Application) -> None:
             S_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name_received)],
             S_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, dob_received)],
             S_CATEGORY: [CallbackQueryHandler(category_chosen, pattern="^cat:")],
-            S_QUALIFICATION: [CallbackQueryHandler(qualification_chosen, pattern="^qual:")],
+            S_DEGREES: [CallbackQueryHandler(degree_chosen, pattern="^deg:")],
+            S_DOCUMENTS: [CallbackQueryHandler(document_chosen, pattern="^doc:")],
             S_SECTORS: [CallbackQueryHandler(sector_chosen, pattern="^sec:")],
+            S_EDIT_MENU: [CallbackQueryHandler(profile_edit_callback, pattern="^pe:")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
@@ -566,8 +980,14 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
     app.add_handler(CommandHandler("scrape_now", admin_scrape_now))
     app.add_handler(CommandHandler("sources", admin_sources))
+    app.add_handler(CommandHandler("users", admin_users))
 
     app.add_handler(TypeHandler(Update, track_owner), group=-1)
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu:"))
+    # The in-chat job browser (Previous / Next) - registered here so that
+    # /latest and /scrape_now pagination actually answers the buttons.
+    app.add_handler(CallbackQueryHandler(browser_callback, pattern="^br:"))
+    app.add_handler(CallbackQueryHandler(full_text_callback, pattern="^full:"))
+    app.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^adm:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
     app.add_error_handler(global_error_handler)

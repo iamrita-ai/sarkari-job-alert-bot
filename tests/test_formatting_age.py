@@ -47,7 +47,7 @@ def test_cards_escape_dangerous_user_input():
     assert "\\[Recruitment\\]" in text
     # Entities we deliberately create stay intact
     assert "*NEW SARKARI JOB MATCH*" in text
-    assert "[CLICK HERE TO FILL FORM]" in text
+    assert "[CLICK HERE TO FILL THE FORM]" in text
     assert len(text) <= 4096
 
     # User-controlled name is escaped on the profile card
