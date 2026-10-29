@@ -27,6 +27,15 @@ services:
         sync: false
       - key: DATABASE_PATH
         value: "data/bot.db"
+      # --- optional v1.5 extras (set in the Render dashboard) -----------
+      # - key: ENABLE_WEB_APP
+      #   value: "true"          # needs a Docker build with INSTALL_WEB=true
+      # - key: WEB_APP_SECRET
+      #   sync: false
+      # - key: BROADCAST_CHANNEL_ID
+      #   sync: false
+      # - key: GROQ_API_KEY
+      #   sync: false
 # NOTE: free web services sleep after inactivity. The bot itself keeps
 # polling Telegram while awake, but Render may restart the container.
 # For 24x7 guaranteed uptime use a paid instance and attach a 1 GB disk
