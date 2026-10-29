@@ -136,13 +136,14 @@ def test_digest_lists_new_jobs_and_closing_saved_jobs(tmp_path):
     asyncio.run(run())
 
 
-def test_orphaned_setup_button_is_never_silent():
+def test_orphaned_setup_button_is_never_silent(tmp_path):
     """A setup button that arrives without a live conversation must answer."""
     import telegram
     from telegram import CallbackQuery, Chat, Message, Update, User
     from telegram.ext import Application, ExtBot
 
     from bot import handlers
+    from bot.db import Database
 
     sent: list = []
     answers: list = []
@@ -175,12 +176,15 @@ def test_orphaned_setup_button_is_never_silent():
     ExtBot.initialize = fake_initialize
     ExtBot.edit_message_text = fake_edit_message_text
     ExtBot.edit_message_reply_markup = fake_edit_message_reply_markup
-    async def run():
+
+    async def run(data: str):
         app = Application.builder().token("123:TEST").build()
-        app.bot_data["db"] = None
+        database = Database(str(tmp_path / "orphan.db"))
+        await database.connect()
+        app.bot_data["db"] = database
         handlers.register_handlers(app)
         query = CallbackQuery(
-            id="1", from_user=USER, chat_instance="ci", data="cat:OBC",
+            id="1", from_user=USER, chat_instance="ci", data=data,
             message=Message(message_id=9, date=None, chat=CHAT, from_user=USER,
                             text="menu"))
         update = Update(update_id=1, callback_query=query)
@@ -196,10 +200,21 @@ def test_orphaned_setup_button_is_never_silent():
                     continue
                 await handler.handle_update(update, app, check, context)
                 break
+        await database.close()
 
     try:
-        asyncio.run(run())
-        assert answers, "the button press was not acknowledged"
+        # 1) an orphaned category button resumes the flow instead of dying
+        asyncio.run(run("cat:OBC"))
+        assert answers, "the button press was never acknowledged"
+        assert sent, "the user got no answer at all - the bot looks broken"
+        assert "OBC" in " ".join(sent), sent
+
+        sent.clear()
+        answers.clear()
+
+        # 2) any other orphaned setup button offers a way back
+        asyncio.run(run("sec:railway"))
+        assert answers, "the button press was never acknowledged"
         assert sent, "the user got no answer at all - the bot looks broken"
         assert "session expired" in sent[0].lower()
     finally:

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -166,6 +167,67 @@ async def _show_deep_linked_job(update: Update, context: ContextTypes.DEFAULT_TY
     return True
 
 
+
+async def _safe_edit(query, text: str, reply_markup=None,  # noqa: ANN001
+                     parse_mode: str | None = None,
+                     disable_web_page_preview: bool = True) -> bool:
+    """Show the next step - edit the message, or send a new one.
+
+    Telegram refuses to edit messages older than 48 hours (and complains
+    "message is not modified" when nothing changed). Without this fallback
+    the setup buttons would look completely dead.
+    """
+    try:
+        await query.edit_message_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+        return True
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return True
+        logger.warning("Could not edit the message (%s) - sending a new one", exc)
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not edit the message - sending a new one")
+    try:
+        await query.message.reply_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+        try:  # remove the stale keyboard so it cannot be tapped again
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not answer the callback query")
+        return False
+
+
+async def _safe_edit_markup(query, reply_markup) -> bool:  # noqa: ANN001
+    """Refresh the keyboard of a multi-select step."""
+    try:
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not refresh the keyboard - sending a new one",
+                       exc_info=True)
+    try:
+        await query.message.reply_text(
+            "Tick the boxes that apply, then press *Done* -",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=reply_markup,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not answer the callback query")
+        return False
+
+
 # ------------------------------------------------------------- onboarding
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     db = _db(context)
@@ -269,6 +331,15 @@ async def dob_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             f"✅ Date of birth updated to `{stored}` \\(age {calculate_age(stored)} Yrs\\)\\."
         )
         return await _show_edit_menu(update, context)
+    if draft.get("category"):
+        # The category was already picked (resumed flow) - do not ask twice.
+        await update.message.reply_markdown_v2(
+            f"🎂 Recorded: `{stored}` \\(age {calculate_age(stored)} Yrs\\)\n\n"
+            "Step 4️⃣/6 — Tick *every degree* you hold "
+            "\\(you can pick several — ITI + B\\.Ed, B\\.Sc + M\\.Com\\, …\\):",
+            reply_markup=degrees_keyboard(draft.get("degrees", set())),
+        )
+        return S_DEGREES
     await update.message.reply_markdown_v2(
         f"🎂 Recorded: `{stored}` \\(age {calculate_age(stored)} Yrs\\)\n\n"
         "Step 3️⃣/6 — Choose your *reservation category*:",
@@ -278,25 +349,55 @@ async def dob_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """The reservation category was picked.
+
+    Works in three situations:
+      * during the onboarding (the category step),
+      * while editing an existing profile (/edit),
+      * on an old keyboard after a restart, when there is no live
+        conversation - the category is remembered and the flow continues
+        instead of the button doing nothing.
+    """
     query = update.callback_query
     key = query.data.split(":", 1)[1]
     if key not in CATEGORY_MAP:
         await query.answer()
         return S_CATEGORY
+
     draft = _draft(context)
     draft["category"] = key
-    await query.answer()
-    if _editing(context):
+    profile = await _db(context).get_user(query.from_user.id)
+
+    # No profile and no name yet: the onboarding has to start at the top.
+    if not _editing(context) and not profile and not draft.get("full_name"):
+        await query.answer(f"✅ {CATEGORY_MAP[key]}", show_alert=True)
+        await query.message.reply_markdown_v2(
+            f"✅ Category: *{md_escape(CATEGORY_MAP[key])}*\\.\n\n"
+            "Step 1️⃣/6 — Type your *full name* now:",
+        )
+        return S_NAME
+
+    await query.answer(f"✅ {CATEGORY_MAP[key]}")
+
+    if _editing(context) or profile:
+        # An existing profile -> update it instead of creating a second one.
+        context.user_data["editing"] = True
+        if profile:
+            draft.setdefault("degrees", set(profile.degrees))
+            draft.setdefault("documents", set(profile.documents))
+            draft.setdefault("sectors", set(profile.sectors))
         await _db(context).update_user(query.from_user.id, category=key)
         await query.message.reply_markdown_v2(
-            f"✅ Category updated to *{md_escape(CATEGORY_MAP[key])}*\\."
+            f"✅ Category updated to *{md_escape(CATEGORY_MAP[key])}*\\.",
         )
         return await _show_edit_menu(update, context)
-    await query.edit_message_text(
+
+    await _safe_edit(
+        query,
         "Step 4️⃣/6 — Tick *every degree* you hold "
         "\\(you can pick several — ITI + B\\.Ed, B\\.Sc + M\\.Com\\, …\\):",
-        parse_mode=ParseMode.MARKDOWN_V2,
         reply_markup=degrees_keyboard(draft.get("degrees", set())),
+        parse_mode=ParseMode.MARKDOWN_V2,
     )
     return S_DEGREES
 
@@ -312,8 +413,8 @@ async def degree_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await query.answer()
             return S_DEGREES
         selected.symmetric_difference_update({key})
-        await query.answer()
-        await query.edit_message_reply_markup(reply_markup=degrees_keyboard(selected))
+        await query.answer(f"✅ {len(selected)} selected")
+        await _safe_edit_markup(query, degrees_keyboard(selected))
         return S_DEGREES
 
     if not selected:
@@ -328,7 +429,8 @@ async def degree_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         )
         return await _show_edit_menu(update, context)
 
-    await query.edit_message_text(
+    await _safe_edit(
+        query,
         "Step 5️⃣/6 — Tick the *documents* you already have "
         "\\(we use them to tell you exactly what a vacancy asks for\\):",
         parse_mode=ParseMode.MARKDOWN_V2,
@@ -348,8 +450,8 @@ async def document_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer()
             return S_DOCUMENTS
         selected.symmetric_difference_update({key})
-        await query.answer()
-        await query.edit_message_reply_markup(reply_markup=documents_keyboard(selected))
+        await query.answer(f"✅ {len(selected)} selected")
+        await _safe_edit_markup(query, documents_keyboard(selected))
         return S_DOCUMENTS
 
     await query.answer("Documents saved ✅")
@@ -360,7 +462,8 @@ async def document_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return await _show_edit_menu(update, context)
 
-    await query.edit_message_text(
+    await _safe_edit(
+        query,
         "Step 6️⃣/6 — Tick the *job sectors* you want alerts for "
         "\\(select several\\), then press *Done*:",
         parse_mode=ParseMode.MARKDOWN_V2,
@@ -380,8 +483,8 @@ async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await query.answer()
             return S_SECTORS
         selected.symmetric_difference_update({key})
-        await query.answer()
-        await query.edit_message_reply_markup(reply_markup=sectors_keyboard(selected))
+        await query.answer(f"✅ {len(selected)} selected")
+        await _safe_edit_markup(query, sectors_keyboard(selected))
         return S_SECTORS
 
     if not selected:
@@ -415,7 +518,8 @@ async def sector_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     context.user_data.pop("draft", None)
     context.user_data.pop("editing", None)
-    await query.edit_message_text(
+    await _safe_edit(
+        query,
         f"✅ *Profile saved successfully\\!*\n\n{profile_card(profile)}",
         parse_mode=ParseMode.MARKDOWN_V2,
         disable_web_page_preview=True,
@@ -1107,7 +1211,17 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
         return
 
     logger.exception("Unhandled error while processing update %s", update, exc_info=error)
-    if isinstance(update, Update) and update.effective_message:
+    if not isinstance(update, Update):
+        return
+    # A button press must never look dead: stop the spinner and say something.
+    if update.callback_query is not None:
+        try:
+            await update.callback_query.answer(
+                "⚠️ Something went wrong - please tap again", show_alert=True
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to answer the callback query")
+    if update.effective_message:
         try:
             await update.effective_message.reply_text(
                 "⚠️ Something went wrong on my side. Please try again in a moment."
@@ -1124,6 +1238,9 @@ def register_handlers(app: Application) -> None:
             CommandHandler("edit", edit_profile),
             CallbackQueryHandler(menu_edit_entry, pattern="^menu:edit$"),
             CallbackQueryHandler(begin_conversation, pattern="^start:begin$"),
+            # A reservation button tapped without a live conversation (after a
+            # restart, or on an old keyboard) must still work.
+            CallbackQueryHandler(category_chosen, pattern="^cat:"),
         ],
         states={
             S_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name_received)],

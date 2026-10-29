@@ -98,7 +98,7 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
   bootstrap protection against mass-notifications on deploy
-- 🧪 **69 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
+- 🧪 **74 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
   documents, coloured buttons and storage
 
 ---
@@ -229,7 +229,7 @@ sarkari-job-alert-bot/
 │   ├── github_push.sh  # create + push the GitHub repo
 │   └── termux_setup.sh # one-shot Termux/Android setup
 ├── DEPLOYMENT.md       # PC, Termux, Docker, MongoDB Atlas guides
-├── tests/              # 69 offline tests (parsers, MD lint, age, degrees, storage,
+├── tests/              # 74 offline tests (parsers, MD lint, age, degrees, storage,
 │   │                    # dispatch, v1.5 features, web dashboard)
 ├── scripts/github_push.sh
 ├── Dockerfile
@@ -242,6 +242,13 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.5.3** — the setup buttons can no longer die silently: the reservation
+  (category) button also works **without** a live conversation (old keyboard,
+  after a redeploy) - it then resumes the profile instead of showing
+  "session expired"; every tap gets a visible toast; steps that cannot edit
+  an old message (Telegram blocks edits after 48 h) fall back to a fresh
+  message; and the error handler answers the button instead of leaving a
+  spinning loader
 - **v1.5.2** — the two bugs that kept the bot offline: `JobQueue.run_daily()`
   has **no** `tz` argument in PTB v22 (the digest job now uses a timezone-aware
   `time` object + `Defaults(tzinfo=Asia/Kolkata)`), and the polling restart now
@@ -307,7 +314,7 @@ Then open your bot in Telegram and send `/start`.
 
 ```bash
 pip install pytest
-pytest -q        # 69 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
+pytest -q        # 74 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
                  # dispatch flow, v1.5 features, web dashboard
 ```
 
