@@ -98,7 +98,7 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
   bootstrap protection against mass-notifications on deploy
-- 🧪 **74 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
+- 🧪 **78 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
   documents, coloured buttons and storage
 
 ---
@@ -229,7 +229,7 @@ sarkari-job-alert-bot/
 │   ├── github_push.sh  # create + push the GitHub repo
 │   └── termux_setup.sh # one-shot Termux/Android setup
 ├── DEPLOYMENT.md       # PC, Termux, Docker, MongoDB Atlas guides
-├── tests/              # 74 offline tests (parsers, MD lint, age, degrees, storage,
+├── tests/              # 78 offline tests (parsers, MD lint, age, degrees, storage,
 │   │                    # dispatch, v1.5 features, web dashboard)
 ├── scripts/github_push.sh
 ├── Dockerfile
@@ -242,6 +242,12 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.5.4** — the MarkdownV2 bug that killed the next step: the text
+  *"pick several — ITI + B.Ed, B.Sc + M.Com"* contained an **unescaped `+`**,
+  so Telegram rejected the whole message with `400 Bad Request` and the flow
+  stopped after the category. Every message of the onboarding, the edit menu,
+  the owner commands and the daily digest is now linted by a test, so a
+  single stray character can never break a message again
 - **v1.5.3** — the setup buttons can no longer die silently: the reservation
   (category) button also works **without** a live conversation (old keyboard,
   after a redeploy) - it then resumes the profile instead of showing
@@ -314,7 +320,7 @@ Then open your bot in Telegram and send `/start`.
 
 ```bash
 pip install pytest
-pytest -q        # 74 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
+pytest -q        # 78 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
                  # dispatch flow, v1.5 features, web dashboard
 ```
 

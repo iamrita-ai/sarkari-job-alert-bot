@@ -291,6 +291,7 @@ RUN pip install --no-cache-dir motor
 | `telegram.error.Conflict: terminated by other getUpdates` | Another instance is using the same token. The bot retries by itself and DMs the owner; stop the old instance. |
 | `TypeError: JobQueue.run_daily() got an unexpected keyword argument 'tz'` | Fixed in v1.5.2 - PTB v22 has no `tz` argument. The digest now uses a timezone-aware time object. |
 | `RuntimeError: Event loop is closed` | Fixed in v1.5.2 - the polling restart creates a new event loop. |
+| `Can't parse entities: character '+' is reserved` | Fixed in v1.5.4 - an unescaped `+` made Telegram reject the whole message (400 Bad Request). Every outgoing MarkdownV2 message is now covered by a lint test. |
 | A setup button does nothing when tapped | Fixed in v1.5.3 - the reservation button now works without a live conversation, every tap is confirmed with a toast, and steps fall back to a new message when the old one can no longer be edited. |
 | Old users have no degrees/documents after the v1.4 update | Normal — the columns default to empty. Send them `/edit` → Degrees / Documents, or they can tick them from `/start`. |
 | `Conflict: terminated by other getUpdates request` | Two instances share the token. Stop the duplicate (cloud service, Termux, old container). |

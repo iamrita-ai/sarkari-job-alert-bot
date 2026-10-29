@@ -1,3 +1,3 @@
 """Sarkari Job Alert Telegram Bot."""
 
-__version__ = "1.5.3"
+__version__ = "1.5.4"

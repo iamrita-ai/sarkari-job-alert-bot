@@ -336,7 +336,7 @@ async def dob_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_markdown_v2(
             f"🎂 Recorded: `{stored}` \\(age {calculate_age(stored)} Yrs\\)\n\n"
             "Step 4️⃣/6 — Tick *every degree* you hold "
-            "\\(you can pick several — ITI + B\\.Ed, B\\.Sc + M\\.Com\\, …\\):",
+            "\\(you can pick several — ITI \\+ B\\.Ed, B\\.Sc \\+ M\\.Com\\, …\\):",
             reply_markup=degrees_keyboard(draft.get("degrees", set())),
         )
         return S_DEGREES
@@ -395,7 +395,7 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _safe_edit(
         query,
         "Step 4️⃣/6 — Tick *every degree* you hold "
-        "\\(you can pick several — ITI + B\\.Ed, B\\.Sc + M\\.Com\\, …\\):",
+        "\\(you can pick several — ITI \\+ B\\.Ed, B\\.Sc \\+ M\\.Com\\, …\\):",
         reply_markup=degrees_keyboard(draft.get("degrees", set())),
         parse_mode=ParseMode.MARKDOWN_V2,
     )
