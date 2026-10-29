@@ -255,7 +255,7 @@ def test_long_qualification_never_pushes_out_the_apply_link():
     assert len(text) <= 4096
     assert "CLICK HERE TO FILL THE FORM" in text
     assert "Notification PDF" not in text  # nothing was there
-    assert "Managed by" in text
+    assert "TechnicalSerena" in text
 
 
 def test_long_notifications_are_split_into_safe_chunks():

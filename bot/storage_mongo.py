@@ -205,6 +205,23 @@ class MongoDatabase:
         return [JobSummary(d["_id"], d["title"], d["url"], d.get("last_date"))
                 async for d in cursor]
 
+    async def list_jobs_since(self, since_iso: str, limit: int = 60) -> list[JobSummary]:
+        cursor = self._db["jobs"].find({"first_seen": {"$gte": since_iso}})
+        cursor = cursor.sort("first_seen", -1).limit(limit)
+        return [JobSummary(d["_id"], d["title"], d["url"], d.get("last_date"))
+                async for d in cursor]
+
+    async def list_recent_jobs(self, days: int = 21, limit: int = 5) -> list[JobSummary]:
+        cutoff = (_utcnow() - timedelta(days=int(days))).isoformat(timespec="seconds")
+        cursor = self._db["jobs"].find({"first_seen": {"$gte": cutoff}})
+        cursor = cursor.sort("first_seen", -1).limit(limit)
+        return [JobSummary(d["_id"], d["title"], d["url"], d.get("last_date"))
+                async for d in cursor]
+
+    async def notified_users(self, job_id: str) -> list[int]:
+        return [int(d["user_id"]) async for d in
+                self._db["notifications"].find({"job_id": job_id})]
+
     async def search_jobs(self, keyword: str, limit: int = 20) -> list[JobSummary]:
         query: dict = {}
         if keyword.strip():

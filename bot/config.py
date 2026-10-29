@@ -40,6 +40,49 @@ Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
 MONGODB_URI: str = os.getenv("MONGODB_URI", "").strip()
 MONGODB_DATABASE: str = os.getenv("MONGODB_DATABASE", "sarkari_job_bot").strip()
 
+# --- Conversation persistence -------------------------------------------
+# Keeps the onboarding conversation alive across restarts (a restart used to
+# turn every pending button press into a no-op). Set to "" to disable.
+PERSISTENCE_PATH: str = os.getenv(
+    "PERSISTENCE_PATH", str(BASE_DIR / "data" / "conversation.pickle")
+)
+
+# --- Broadcast channel (optional) ---------------------------------------
+# Every new job is also posted to this channel (@your_channel or
+# -1001234567890). Leave empty to disable.
+BROADCAST_CHANNEL_ID: str = os.getenv("BROADCAST_CHANNEL_ID", "").strip()
+
+# --- Optional AI summary (Groq) -----------------------------------------
+# Free tier: https://console.groq.com - turns the long eligibility text into
+# three plain lines (and optionally Hindi). Without a key the bot simply
+# shows the original text.
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+AI_SUMMARY_ENABLED: bool = _get_bool("AI_SUMMARY_ENABLED", bool(GROQ_API_KEY))
+AI_SUMMARY_LANGUAGE: str = os.getenv("AI_SUMMARY_LANGUAGE", "en").strip().lower()
+# Card language: "en", "hi" or "both" (Hindi block under the English card)
+CARD_LANGUAGE: str = os.getenv("CARD_LANGUAGE", "both").strip().lower()
+
+# --- Web app (optional FastAPI dashboard) -------------------------------
+ENABLE_WEB_APP: bool = _get_bool("ENABLE_WEB_APP", False)
+WEB_APP_PORT: int = int(os.getenv("WEB_APP_PORT", "8081"))
+# Secret used to sign per-user links (/webapp). Generate with:
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+WEB_APP_SECRET: str = os.getenv("WEB_APP_SECRET", "").strip()
+# Public address of this deployment (used for the dashboard links).
+PUBLIC_BASE_URL: str = os.getenv(
+    "PUBLIC_BASE_URL", os.getenv("RENDER_EXTERNAL_URL", "")
+).strip()
+
+# --- Digests & watch list ------------------------------------------------
+# Daily digest time (IST) - "today's new jobs + jobs closing soon".
+DIGEST_HOUR: int = int(os.getenv("DIGEST_HOUR", "9"))
+DIGEST_ENABLED: bool = _get_bool("DIGEST_ENABLED", True)
+# How many catalogued jobs are re-checked per cycle for admit-card / exam
+# date / last-date-extension changes.
+WATCH_JOBS_PER_RUN: int = int(os.getenv("WATCH_JOBS_PER_RUN", "4"))
+WATCH_WINDOW_DAYS: int = int(os.getenv("WATCH_WINDOW_DAYS", "21"))
+
 # --- Health-check server (Render / getvoroa / Voroa) ----------------------
 ENABLE_HEALTH_SERVER: bool = _get_bool("ENABLE_HEALTH_SERVER", True)
 PORT: int = int(os.getenv("PORT", "8080"))

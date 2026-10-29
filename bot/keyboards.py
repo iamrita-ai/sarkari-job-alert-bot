@@ -41,12 +41,20 @@ def _rows(items: list[InlineKeyboardButton], per_row: int = 2
 
 # ----------------------------------------------------------- onboarding
 def category_keyboard() -> InlineKeyboardMarkup:
+    """Reservation categories - plain labels, no emoji (cleaner on mobile)."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(
-            f"{CATEGORY_EMOJI.get(key, '🔘')} {label}",
-            callback_data=f"cat:{key}", style=BLUE,
+            label, callback_data=f"cat:{key}", style=BLUE,
         )]
         for key, label in CATEGORIES
+    ])
+
+
+def resume_setup_keyboard() -> InlineKeyboardMarkup:
+    """Shown when a setup button arrives without a live conversation."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Get Started", callback_data="start:begin", style=GREEN)],
+        [InlineKeyboardButton("✏️ Edit Profile", callback_data="menu:edit", style=BLUE)],
     ])
 
 

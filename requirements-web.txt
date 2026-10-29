@@ -1,0 +1,5 @@
+# Optional web dashboard (bot/webapp.py) - not needed for the bot itself.
+# Install with: pip install -r requirements-web.txt
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+python-multipart>=0.0.9,<1

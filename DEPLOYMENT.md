@@ -277,6 +277,8 @@ RUN pip install --no-cache-dir motor
 |---|---|
 | `Can't parse entities: character '.' is reserved` | Fixed in v1.3 — update to the latest image. All MarkdownV2 text is now lint-tested. |
 | Next / Previous buttons do nothing | Fixed in v1.4 — the browser callbacks were never registered. Pull the latest image (`docker compose pull && docker compose up -d`). |
+| A setup button (category / degrees / documents) does nothing | Either the bot restarted (state is persisted now, v1.5) or **a second instance with the same token is eating the updates**. The bot now answers such taps with "session expired" and the owner gets a "duplicate instance" DM — stop every copy except one. |
+| The bot feels silent for a whole day | Enable the daily digest (`DIGEST_ENABLED=true`, `DIGEST_HOUR=9`) and the notice-update watch list (`WATCH_JOBS_PER_RUN=4`). |
 | Old users have no degrees/documents after the v1.4 update | Normal — the columns default to empty. Send them `/edit` → Degrees / Documents, or they can tick them from `/start`. |
 | `Conflict: terminated by other getUpdates request` | Two instances share the token. Stop the duplicate (cloud service, Termux, old container). |
 | `/start` shows an error but scraping works | Redeploy latest commit; the welcome caption bug is fixed and the banner now falls back to text. |
@@ -284,3 +286,62 @@ RUN pip install --no-cache-dir motor
 | PyPI `ReadTimeoutError` while building | The Dockerfile retries 5× with a 120 s timeout; rebuild once, or set `PIP_INDEX_URL` to a regional mirror. |
 | Bot stops when Termux is swiped away | Run `termux-wake-lock`, disable Android battery optimisation, use the Termux:Boot script. |
 | Data lost after cloud redeploy | SQLite is file-based; attach a volume at `/app/data`, or switch to MongoDB. |
+
+
+---
+
+## Optional v1.5 extras
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PERSISTENCE_PATH` | `data/conversation.pickle` | Keeps the onboarding conversation alive across restarts |
+| `DIGEST_ENABLED` / `DIGEST_HOUR` | `true` / `9` | Daily digest at 09:05 IST (new jobs + jobs closing soon) |
+| `WATCH_JOBS_PER_RUN` | `4` | How many live notices are re-checked per cycle for admit card / exam date / extension |
+| `WATCH_WINDOW_DAYS` | `21` | How far back the watch list looks |
+| `CARD_LANGUAGE` | `both` | `en`, `hi` or `both` (Hindi block under the English card) |
+| `GROQ_API_KEY` | *(empty)* | Optional AI summary (free key: https://console.groq.com/keys) |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Which Groq model to use |
+| `AI_SUMMARY_ENABLED` | `true` when a key is set | Turn the AI summary on/off |
+| `AI_SUMMARY_LANGUAGE` | `en` | Language of the AI summary |
+| `BROADCAST_CHANNEL_ID` | *(empty)* | Mirror every new job into your channel (`@your_channel` or `-100…`) |
+| `ENABLE_WEB_APP` | `false` | Start the FastAPI dashboard (needs `pip install -r requirements-web.txt`) |
+| `WEB_APP_PORT` | `8081` | Port of the dashboard |
+| `WEB_APP_SECRET` | *(empty)* | Secret that signs the personal `/webapp` links — generate with `python -c "import secrets;print(secrets.token_urlsafe(32))"` |
+| `PUBLIC_BASE_URL` | *(empty)* | Public address of your deployment, used to build dashboard links |
+
+### Groq AI summary (optional)
+
+```bash
+# 1. create a free key at https://console.groq.com/keys
+# 2. add to .env
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxx
+AI_SUMMARY_ENABLED=true
+```
+
+Without a key the bot is exactly as before — the original eligibility text is
+shown. With a key each card gains a "🧠 In short: …" line (and a Hindi one
+when `CARD_LANGUAGE=both`).
+
+### Broadcast channel
+
+1. Create a Telegram channel, add the bot as an **admin** with "post messages".
+2. Put the channel id in `.env`:
+
+```bash
+BROADCAST_CHANNEL_ID=@your_channel      # or -1001234567890
+```
+
+3. Test it with `/channel` (owner only).
+
+### Web dashboard
+
+```bash
+pip install -r requirements-web.txt
+ENABLE_WEB_APP=true
+WEB_APP_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
+PUBLIC_BASE_URL=https://your-public-domain
+```
+
+Every user gets a signed personal link with `/webapp`. The dashboard shows
+the latest vacancies (with search + state filter), their saved jobs and a
+form to edit name, DOB, category, degrees, documents and sectors.

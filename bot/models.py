@@ -49,6 +49,10 @@ class JobDetail:
     documents_required: list[str] = dataclasses.field(default_factory=list)
     official_site: str | None = None
     short_notice: str | None = None
+    vacancy_breakdown: dict[str, str] = dataclasses.field(default_factory=dict)
+    states: list[str] = dataclasses.field(default_factory=list)
+    ai_summary: str = ""                 # optional plain-English summary
+    ai_summary_hi: str = ""              # optional Hindi summary
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), ensure_ascii=False)

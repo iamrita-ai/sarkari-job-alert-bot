@@ -58,6 +58,30 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🔖 **Save jobs & set date reminders** — bookmark any vacancy, then get a
   one-tap reminder (1 day / 3 days before / on last date, or a custom date at
   9:00 AM IST); reminders survive restarts and are managed under `/saved`
+- 📬 **Never silent** — three new proactive loops:
+  - **🔁 Notice updates**: the bot re-checks live notices and alerts the
+    people who already got that job when the **admit card is published**, the
+    **exam date is fixed** or the **last date is extended**;
+  - **☀️ Daily digest** every morning at 09:05 IST — yesterday's new
+    matching jobs plus the saved jobs closing within three days;
+  - **📢 Channel mirror**: every new vacancy is also posted to your own
+    Telegram channel (`BROADCAST_CHANNEL_ID`)
+- 🧠 **Optional AI summary** (Groq, free tier) — the long eligibility text is
+  turned into three plain lines ("🧠 In short: …"), optionally in Hindi.
+  Completely optional: without a key the bot shows the original text
+- 🇮🇳 **Hindi + English cards** — the same notification in both languages
+  (`CARD_LANGUAGE=both`)
+- 👥 **Category-wise vacancy breakdown** — "General 542 · OBC 296 · SC 176"
+  with the user's own category marked
+- 📍 **State filters** — `/latest bihar`, `/latest "uttar pradesh"`, and a
+  state filter in the web dashboard
+- 🌐 **Web dashboard** (optional FastAPI app) — a phone-friendly page to
+  edit degrees/documents and browse vacancies with filters; every user gets
+  a signed personal link via `/webapp`
+- 🧩 **Robust conversations** — the onboarding state is persisted, so a
+  button pressed after a restart still works; a tap that arrives without a
+  live session is answered with a "session expired" message instead of
+  silence; duplicate instances now trigger an owner alert
 - 🏁 **Welcome banner image** on `/start`
 - 🔄 **Automatic background checks** every 30 minutes (configurable) via PTB JobQueue
 - 🛡️ **No spam** — first deployment bootstraps the existing listing silently;
@@ -74,7 +98,7 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
   bootstrap protection against mass-notifications on deploy
-- 🧪 **43 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
+- 🧪 **59 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
   documents, coloured buttons and storage
 
 ---
@@ -118,6 +142,38 @@ PTB JobQueue (every N min)
 | `/scrape_now` | 👑 Owners — run a cycle, then browse all catalogued jobs |
 | `/sources` | 👑 Owners — live health check of every scraping source |
 | `/users` | 👑 Owners — browse every subscriber and open their profile |
+| `/webapp` | Open your personal web dashboard (if enabled) |
+| `/latest <state>` | Browse matching jobs of one state (`/latest bihar`) |
+| `/digest` | 👑 Owners — preview the daily digest |
+| `/channel` | 👑 Owners — post a test message to the broadcast channel |
+
+### 📰 What exactly is "Sarkari Result"? (and what it is *not*)
+
+**sarkariresult.com is not a government website.** It is an **independent
+job-aggregator site** that re-publishes the official recruitment
+notifications of Indian public bodies (Railway, SSC, UPSC, BPSC, UPSSSC,
+PSUs…) into one feed — with the extras people actually search for: last date,
+age limit, fee, vacancy table and an "apply online" link.
+
+* The **official application always happens on the government body's own
+  portal.** Sarkari Result only aggregates and links to it. That is why
+  every card carries an **🏛 Official Website** and **📄 Notification PDF**
+  link and why the footer repeats the disclaimer.
+* Because it is a WordPress blog it changes its markup often and sits behind
+  **CloudFront**, which blocks most datacenter IPs (Render, Voroa, VPS…).
+* That is exactly why the bot runs a **source chain** — three ways of reading
+  *the same* website, tried in order until one answers:
+
+| # | Source | What it is | Why |
+|---|---|---|---|
+| 1 | `sarkariresult.com.cm` | **The mirror** — an independent copy of the same blog | Not behind CloudFront → works from cloud hosts (primary) |
+| 2 | `www.sarkariresult.com` | **The original site** | Direct read, works from residential IPs |
+| 3 | `r.jina.ai` reader | **A text-extraction proxy** for the original | Last resort when the original blocks us |
+
+So `/sources` does **not** list three different job boards — it lists three
+*readers of one site*. All of them publish the same notifications; the bot
+uses the first that answers. A 🟡 *standby* on a fallback is normal and
+harmless: only a ❌ on **mirror** means a real problem.
 
 ### 🎨 Coloured inline buttons
 
@@ -148,7 +204,7 @@ same card opens inside the bot DM with Save / Reminder actions.
 sarkari-job-alert-bot/
 ├── bot/
 │   ├── config.py       # all settings from environment variables
-│   ├── constants.py    # categories, qualifications, degrees, documents, sectors
+│   ├── constants.py    # categories, degrees, documents, sectors, states
 │   ├── models.py       # JobSummary, JobDetail, UserProfile, SavedJob dataclasses
 │   ├── db.py           # async SQLite (users / jobs / notifications / bookmarks)
 │   ├── scraper.py      # httpx fetcher + mirror/original parsers (one file to fix)
@@ -156,6 +212,9 @@ sarkari-job-alert-bot/
 │   ├── cards.py        # MarkdownV2 cards + 1024-char photo captions
 │   ├── keyboards.py    # coloured inline keyboards (primary/success/danger)
 │   ├── browser.py      # paginated Next/Previous job browsers
+│   ├── digest.py       # daily 09:05 IST digest
+│   ├── ai.py           # optional Groq summaries (never required)
+│   ├── webapp.py       # optional FastAPI dashboard + signed links
 │   ├── inline.py       # inline-mode search + deep-link cards
 │   ├── reminders.py    # save jobs, date reminders, JobQueue re-arming
 │   ├── handlers.py     # commands, 6-step profile conversation, edit menu, admin
@@ -170,7 +229,8 @@ sarkari-job-alert-bot/
 │   ├── github_push.sh  # create + push the GitHub repo
 │   └── termux_setup.sh # one-shot Termux/Android setup
 ├── DEPLOYMENT.md       # PC, Termux, Docker, MongoDB Atlas guides
-├── tests/              # 43 offline tests (parsers, MD lint, age, degrees, storage)
+├── tests/              # 59 offline tests (parsers, MD lint, age, degrees, storage,
+│   │                    # dispatch, v1.5 features, web dashboard)
 ├── scripts/github_push.sh
 ├── Dockerfile
 ├── docker-compose.yml
@@ -182,6 +242,11 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.5** — never-silent bot: admit-card / exam-date / last-date-extension
+  update alerts, daily 09:05 IST digest, broadcast-channel mirror, optional
+  Groq AI summaries, Hindi + English cards, category-wise vacancy breakdown,
+  state filters, optional FastAPI dashboard, persisted conversations and an
+  anti-silence fallback for orphaned buttons
 - **v1.4** — full notification cards (start/last date, full qualification,
   total posts, selection process, documents), multi-select degrees & documents
   with document-aware matching, `/edit` profile menu, owner `/users` browser,
@@ -230,7 +295,8 @@ Then open your bot in Telegram and send `/start`.
 
 ```bash
 pip install pytest
-pytest -q        # 26 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards
+pytest -q        # 59 tests: parsers, MarkdownV2 lint, age rules, storage, keyboards,
+                 # dispatch flow, v1.5 features, web dashboard
 ```
 
 ---

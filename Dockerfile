@@ -12,11 +12,18 @@ WORKDIR /app
 # Install dependencies first (better Docker layer caching).
 # --retries + long timeout: transient PyPI read timeouts no longer fail the build.
 # --prefer-binary: always take wheels, never fall back to slow source builds.
-COPY requirements.txt .
+COPY requirements.txt requirements-web.txt ./
+
+# Set INSTALL_WEB=true to ship the optional web dashboard (FastAPI) too.
+ARG INSTALL_WEB=false
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir \
        --retries 5 --timeout 120 --prefer-binary \
-       -r requirements.txt
+       -r requirements.txt \
+    && if [ "$INSTALL_WEB" = "true" ]; then \
+         pip install --no-cache-dir --retries 5 --timeout 120 --prefer-binary \
+           -r requirements-web.txt; \
+       fi
 
 # Copy application code and bundled assets (start banner image)
 COPY bot ./bot
@@ -29,7 +36,8 @@ RUN mkdir -p /app/data \
 
 USER appuser
 
-# Render / getvoroa health check (served by bot/health.py)
+# Render / getvoroa health check (served by bot/health.py) + optional dashboard
 EXPOSE 8080
+EXPOSE 8081
 
 CMD ["python", "-m", "bot.main"]

@@ -26,6 +26,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from bot import config
+from bot.constants import STATES
 from bot.models import JobDetail, JobSummary
 
 logger = logging.getLogger(__name__)
@@ -418,6 +419,40 @@ def _table_by_header(soup: BeautifulSoup, header: str) -> BeautifulSoup | None:
     return None
 
 
+def _vacancy_breakdown(soup: BeautifulSoup) -> dict[str, str]:
+    """Category -> number of posts from the 'Category Name | No. Of Posts' table."""
+    table = _table_by_header(soup, "No. Of Posts")
+    if table is None:
+        table = _table_by_header(soup, "Number of Posts")
+    if table is None:
+        return {}
+    breakdown: dict[str, str] = {}
+    for index, row in enumerate(table.find_all("tr")):
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 2:
+            continue
+        label = _clean(cells[0].get_text(" ", strip=True))
+        value = _clean(cells[1].get_text(" ", strip=True))
+        if index == 0 and label.lower() in {"category name", "category"}:
+            continue
+        if not label or not value or len(label) > 40:
+            continue
+        breakdown[label] = value[:20]
+    return breakdown
+
+
+def detect_states(text: str) -> list[str]:
+    """Indian states / union territories mentioned in the notice."""
+    low = text.lower()
+    found: list[str] = []
+    for state in STATES:
+        for alias in state["aliases"]:
+            if alias in low:
+                found.append(state["key"])
+                break
+    return found
+
+
 def _eligibility_table(soup: BeautifulSoup) -> BeautifulSoup | None:
     """The post/eligibility table (header may say 'Eligibility' or
     'Education Qualification')."""
@@ -670,6 +705,10 @@ def parse_mirror_detail_html(html: str, url: str) -> JobDetail:
         documents_required=documents,
         official_site=official_site,
         short_notice=short_notice,
+        vacancy_breakdown=_vacancy_breakdown(soup),
+        # only the headline + intro mention the state; the footer lists
+        # unrelated "you may also check" posts from other states
+        states=detect_states(f"{exam_name} {text[:1500]}"),
     )
 
 
@@ -866,6 +905,7 @@ def _build_original_detail(text: str, links: list[tuple[str, str]]) -> JobDetail
         application_mode=_first(pairs, ["apply mode", "mode of application"]),
         qualification=eligibility,
         documents_required=detect_documents(text),
+        states=detect_states(text[:1500]),
     )
 
 

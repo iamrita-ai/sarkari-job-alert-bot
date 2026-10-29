@@ -342,6 +342,44 @@ class Database:
             for r in rows
         ]
 
+    async def list_jobs_since(self, since_iso: str, limit: int = 60) -> list[JobSummary]:
+        """Jobs catalogued after ``since_iso`` (used by the daily digest)."""
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT job_id, url, title, last_date FROM jobs "
+            "WHERE first_seen >= ? ORDER BY first_seen DESC LIMIT ?",
+            (since_iso, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            JobSummary(r["job_id"], r["title"], r["url"], r["last_date"])
+            for r in rows
+        ]
+
+    async def list_recent_jobs(self, days: int = 21, limit: int = 5) -> list[JobSummary]:
+        """Recently catalogued jobs - the watch list for admit-card updates."""
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT job_id, url, title, last_date FROM jobs "
+            "WHERE first_seen >= datetime('now', ?) "
+            "ORDER BY first_seen DESC LIMIT ?",
+            (f"-{int(days)} days", limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            JobSummary(r["job_id"], r["title"], r["url"], r["last_date"])
+            for r in rows
+        ]
+
+    async def notified_users(self, job_id: str) -> list[int]:
+        """Everyone who already received this job (for update alerts)."""
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT user_id FROM notifications WHERE job_id = ?", (job_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+        return [int(r["user_id"]) for r in rows]
+
     async def search_jobs(self, keyword: str, limit: int = 20) -> list[JobSummary]:
         assert self._db is not None
         if keyword.strip():

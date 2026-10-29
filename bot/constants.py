@@ -201,6 +201,84 @@ DOCUMENTS: list[dict] = [
 DOCUMENT_MAP: dict[str, dict] = {d["key"]: d for d in DOCUMENTS}
 DOCUMENT_KEYS: set[str] = set(DOCUMENT_MAP)
 
+# Indian states & union territories we can recognise in a vacancy title.
+# Used by the /latest <state> filter and by the web dashboard.
+STATES: list[dict] = [
+    {"key": "andhra_pradesh", "label": "Andhra Pradesh",
+     "aliases": ["andhra pradesh", "andhra"]},
+    {"key": "assam", "label": "Assam", "aliases": ["assam"]},
+    {"key": "bihar", "label": "Bihar", "aliases": ["bihar", "bpsc"]},
+    {"key": "chhattisgarh", "label": "Chhattisgarh",
+     "aliases": ["chhattisgarh", "state psd"]},
+    {"key": "delhi", "label": "Delhi", "aliases": ["delhi", "dsss", "dsssb"]},
+    {"key": "goa", "label": "Goa", "aliases": ["goa"]},
+    {"key": "gujarat", "label": "Gujarat", "aliases": ["gujarat", "gpsc"]},
+    {"key": "haryana", "label": "Haryana", "aliases": ["haryana", "hsc hss"]},
+    {"key": "himachal_pradesh", "label": "Himachal Pradesh",
+     "aliases": ["himachal", "himachal pradesh"]},
+    {"key": "jharkhand", "label": "Jharkhand", "aliases": ["jharkhand"]},
+    {"key": "karnataka", "label": "Karnataka",
+     "aliases": ["karnataka", "kpsc", "karnataka state"]},
+    {"key": "kerala", "label": "Kerala", "aliases": ["kerala", "ksprc"]},
+    {"key": "madhya_pradesh", "label": "Madhya Pradesh",
+     "aliases": ["madhya pradesh", "mpesb", "mpsc"]},
+    {"key": "maharashtra", "label": "Maharashtra",
+     "aliases": ["maharashtra", "maha"]},
+    {"key": "manipur", "label": "Manipur", "aliases": ["manipur"]},
+    {"key": "meghalaya", "label": "Meghalaya", "aliases": ["meghalaya"]},
+    {"key": "mizoram", "label": "Mizoram", "aliases": ["mizoram"]},
+    {"key": "nagaland", "label": "Nagaland", "aliases": ["nagaland"]},
+    {"key": "odisha", "label": "Odisha", "aliases": ["odisha", "orissa", "ossc"]},
+    {"key": "punjab", "label": "Punjab", "aliases": ["punjab", "psssb"]},
+    {"key": "rajasthan", "label": "Rajasthan", "aliases": ["rajasthan", "rsmsc", "rpsc"]},
+    {"key": "sikkim", "label": "Sikkim", "aliases": ["sikkim"]},
+    {"key": "tamil_nadu", "label": "Tamil Nadu", "aliases": ["tamil nadu", "tn govt"]},
+    {"key": "telangana", "label": "Telangana", "aliases": ["telangana"]},
+    {"key": "tripura", "label": "Tripura", "aliases": ["tripura"]},
+    {"key": "uttar_pradesh", "label": "Uttar Pradesh",
+     "aliases": ["uttar pradesh", "uppsc", "upsssc", "up govt"]},
+    {"key": "uttarakhand", "label": "Uttarakhand", "aliases": ["uttarakhand", "ukpsc"]},
+    {"key": "west_bengal", "label": "West Bengal",
+     "aliases": ["west bengal", "wbpsc"]},
+    {"key": "jammu_kashmir", "label": "Jammu & Kashmir",
+     "aliases": ["jammu", "kashmir"]},
+    {"key": "ladakh", "label": "Ladakh", "aliases": ["ladakh"]},
+    {"key": "puducherry", "label": "Puducherry", "aliases": ["puducherry", "pondicherry"]},
+]
+STATE_MAP: dict[str, dict] = {s["key"]: s for s in STATES}
+STATE_KEYS: set[str] = set(STATE_MAP)
+
+# Hindi labels for the bilingual card (feature: Hindi + English cards).
+HINDI_LABELS: dict[str, str] = {
+    "organisation": "संस्था",
+    "exam": "परीक्षा",
+    "notification_date": "नोटिफिकेशन तारीख",
+    "total_posts": "कुल पद",
+    "selection_process": "चयन प्रक्रिया",
+    "apply_mode": "आवेदन माध्यम",
+    "important_dates": "महत्वपूर्ण तारीखें",
+    "start_date": "आवेदन शुरू",
+    "last_date": "आवेदन अंतिम तिथि",
+    "fee_date": "फीस जमा अंतिम तिथि",
+    "correction_date": "सुधार तारीख",
+    "exam_date": "परीक्षा तारीख",
+    "admit_card": "एडमिट कार्ड",
+    "result_date": "रिजल्ट तारीख",
+    "qualification": "योग्यता",
+    "salary": "वेतन",
+    "fee": "आवेदन शुल्क",
+    "age_limit": "आयु सीमा",
+    "documents": "आवश्यक दस्तावेज़",
+    "apply_online": "ऑनलाइन आवेदन करें",
+    "full_details": "पूरी जानकारी",
+    "notification_pdf": "नोटिफिकेशन पीडीएफ",
+    "official_site": "आधिकारिक वेबसाइट",
+    "short_notice": "शॉर्ट नोटिस",
+    "you": "आप",
+    "category": "आरक्षण श्रेणी",
+    "posts": "पद",
+}
+
 # Job sectors users can subscribe to. Keywords are matched against the
 # vacancy title and URL slug. Sectors overlap on purpose - a user can pick
 # several and a job can match more than one sector.

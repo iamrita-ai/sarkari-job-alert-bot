@@ -196,7 +196,28 @@ async def run_checks(db) -> int:
     assert "standby" in text and "Primary source is healthy" in text
     print("OK /sources report shows fallbacks as standby")
 
-    print("\nSMOKE OK - all v1.4 flows work")
+    # ------------------------------------------------------- daily digest
+    from bot.digest import build_digest
+
+    class FakeApp2:
+        def __init__(self, database):
+            self.bot_data = {"db": database}
+
+    profile = await db.get_user(4242)
+    await db.upsert_jobs([jobs[0]])
+    digest = await build_digest(FakeApp2(db), profile)
+    assert digest is not None and "Good morning" in digest
+    print("OK daily digest builds")
+
+    # --------------------------------------------------------- web app token
+    from bot.webapp import sign_token, verify_token
+
+    token = sign_token(4242, "secret")
+    assert verify_token(token, "secret") == 4242
+    assert verify_token(token, "other") is None
+    print("OK web dashboard token")
+
+    print("\nSMOKE OK - all v1.5 flows work")
     return 0
 
 

@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import time as dtime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, Update
-from telegram.ext import Application
+from telegram.ext import Application, PicklePersistence
 
 from bot import config
 from bot.db import build_database
+from bot.digest import send_daily_digest
 from bot.handlers import register_handlers
 from bot.health import start_health_server
 from bot.inline import register_inline
@@ -49,6 +53,30 @@ async def _post_init(app: Application) -> None:
     # Re-arm bookmark reminders that were scheduled before this restart
     await schedule_all_pending(app)
 
+    # Daily digest - one message every morning (IST) so the bot is never
+    # silent for a whole day.
+    if config.DIGEST_ENABLED:
+        app.job_queue.run_daily(
+            send_daily_digest,
+            time=dtime(hour=config.DIGEST_HOUR, minute=5),
+            days=tuple(range(7)),
+            tz=ZoneInfo("Asia/Kolkata"),
+            name="daily-digest",
+        )
+        logger.info("Daily digest scheduled at %02d:05 IST", config.DIGEST_HOUR)
+
+    # Optional web dashboard (FastAPI) - needs requirements-web.txt
+    if config.ENABLE_WEB_APP:
+        try:
+            from bot.webapp import start_web_app
+
+            start_web_app(app)
+        except ImportError:
+            logger.warning(
+                "ENABLE_WEB_APP is on but fastapi/uvicorn are missing - "
+                "run: pip install -r requirements-web.txt"
+            )
+
     await app.bot.set_my_commands([
         BotCommand("start", "Create / view your job profile"),
         BotCommand("profile", "Show your saved preferences"),
@@ -59,6 +87,7 @@ async def _post_init(app: Application) -> None:
         BotCommand("resume", "Resume job alerts"),
         BotCommand("help", "Help & usage"),
         BotCommand("about", "About this bot & owners"),
+        BotCommand("webapp", "Open your personal web dashboard"),
     ])
 
     if config.ENABLE_HEALTH_SERVER:
@@ -90,6 +119,16 @@ def main() -> None:
         .post_shutdown(_post_shutdown)
         .build()
     )
+    # Conversation persistence: the onboarding steps survive a restart, so a
+    # button pressed after a redeploy still works.
+    if config.PERSISTENCE_PATH:
+        try:
+            Path(config.PERSISTENCE_PATH).parent.mkdir(parents=True, exist_ok=True)
+            app.persistence = PicklePersistence(filepath=config.PERSISTENCE_PATH)
+            logger.info("Conversation persistence: %s", config.PERSISTENCE_PATH)
+        except Exception:  # noqa: BLE001 - never block the bot on this
+            logger.exception("Could not enable conversation persistence")
+
     register_handlers(app)
     register_reminders(app)
     register_inline(app)

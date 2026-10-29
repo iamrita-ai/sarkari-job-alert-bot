@@ -41,6 +41,23 @@ def _clip(text: str, limit: int) -> str:
     return text[:cut].rstrip() + "…"
 
 
+def _assemble(top: list[str], middle: list[str], bottom: list[str],
+              limit: int) -> str:
+    """Join the three card zones, clipping the *middle* (the long
+    qualification text) so the tail - apply links, PDF, credits - can never
+    be pushed out by Telegram's message limit."""
+    top_text = "\n".join(top)
+    bottom_text = "\n".join(bottom)
+    middle_text = "\n".join(middle)
+    allowance = limit - len(top_text) - len(bottom_text) - 2
+    if allowance < 30:
+        middle_text = ""
+    elif len(middle_text) > allowance:
+        middle_text = _clip(middle_text, allowance)
+    parts = [part for part in (top_text, middle_text, bottom_text) if part]
+    return "\n".join(parts)
+
+
 def _age_line(detail: JobDetail, profile: UserProfile, age_info: dict | None) -> str:
     if detail.min_age is None and detail.max_age is None:
         published = md_escape("See notification")
@@ -60,15 +77,17 @@ def _age_line(detail: JobDetail, profile: UserProfile, age_info: dict | None) ->
     return line
 
 
-def _dates_block(detail: JobDetail) -> list[str]:
+def _dates_block(detail: JobDetail, labels: dict | None = None) -> list[str]:
+    """The important-dates table of the notification."""
+    lab = labels or {}
     rows = [
-        ("🟢 Apply Online Start Date", detail.apply_start_date),
-        ("🔴 Apply Online Last Date", detail.apply_last_date),
-        ("💳 Fee Payment Last Date", detail.fee_last_date),
-        ("✏️ Correction Date", detail.correction_date),
-        ("📝 Exam Date", detail.exam_date),
-        ("🎫 Admit Card", detail.admit_card_date),
-        ("🏁 Result Date", detail.result_date),
+        ("🟢 " + lab.get("start_date", "Apply Online Start Date"), detail.apply_start_date),
+        ("🔴 " + lab.get("last_date", "Apply Online Last Date"), detail.apply_last_date),
+        ("💳 " + lab.get("fee_date", "Fee Payment Last Date"), detail.fee_last_date),
+        ("✏️ " + lab.get("correction_date", "Correction Date"), detail.correction_date),
+        ("📝 " + lab.get("exam_date", "Exam Date"), detail.exam_date),
+        ("🎫 " + lab.get("admit_card", "Admit Card"), detail.admit_card_date),
+        ("🏁 " + lab.get("result_date", "Result Date"), detail.result_date),
     ]
     lines = []
     for label, value in rows:
@@ -77,12 +96,36 @@ def _dates_block(detail: JobDetail) -> list[str]:
     return lines
 
 
-def _documents_block(detail: JobDetail, profile: UserProfile | None) -> list[str]:
+def _breakdown_line(detail: JobDetail, profile: UserProfile | None) -> str:
+    """Category-wise vacancy breakdown, with the user's own category marked."""
+    breakdown = detail.vacancy_breakdown or {}
+    if not breakdown:
+        return ""
+    user_category = (profile.category if profile else "") or ""
+    bits: list[str] = []
+    for label, value in list(breakdown.items())[:8]:
+        marker = " ← " + user_category if label.upper().startswith(user_category.upper()) else ""
+        bits.append(f"{md_escape(label)} {md_escape(value)}{marker}")
+    return " · ".join(bits)
+
+
+def _state_line(detail: JobDetail) -> str:
+    if not detail.states:
+        return ""
+    from bot.constants import STATE_MAP
+
+    labels = [STATE_MAP[s]["label"] for s in detail.states if s in STATE_MAP]
+    return md_escape(", ".join(labels))
+
+
+def _documents_block(detail: JobDetail, profile: UserProfile | None,
+                     labels: dict | None = None) -> list[str]:
     required = detail.documents_required or []
     if not required:
         return []
+    lab = labels or {}
     owned = set(profile.documents) if profile else set()
-    lines = [f"📎 {bold('Documents Needed:')}"]
+    lines = [f"📎 {bold(lab.get('documents', 'Documents Needed') + ':')}"]
     for key in required:
         label = DOCUMENT_MAP.get(key, {}).get("label", key)
         if not profile:
@@ -90,25 +133,38 @@ def _documents_block(detail: JobDetail, profile: UserProfile | None) -> list[str
         elif key in owned:
             lines.append(f"• ✅ {md_escape(label)}")
         else:
-            lines.append(f"• ❌ {md_escape(label)} \\(not in your profile\\)")
+            lines.append(f"• ❌ {md_escape(label)}")
     return lines
 
 
-def _assemble(top: list[str], middle: list[str], bottom: list[str],
-              limit: int) -> str:
-    """Join the three card zones, clipping the *middle* (the long
-    qualification text) so the tail - apply links, PDF, credits - can never
-    be pushed out by Telegram's message limit."""
-    top_text = "\n".join(top)
-    bottom_text = "\n".join(bottom)
-    middle_text = "\n".join(middle)
-    allowance = limit - len(top_text) - len(bottom_text) - 2
-    if allowance < 30:
-        middle_text = ""
-    elif len(middle_text) > allowance:
-        middle_text = _clip(middle_text, allowance)
-    parts = [part for part in (top_text, middle_text, bottom_text) if part]
-    return "\n".join(parts)
+def _hindi_block(detail: JobDetail, profile: UserProfile,
+                 age_info: dict | None = None) -> list[str]:
+    """Compact Hindi version of the key facts (feature: Hindi + English cards)."""
+    from bot.constants import HINDI_LABELS as H
+
+    lines = ["🇮🇳 *हिंदी में देखें*"]
+    state = _state_line(detail)
+    if state:
+        lines.append(f"📍 *राज्य:* {state}")
+    if detail.total_posts:
+        lines.append(f"👥 *{H['total_posts']}:* {md_escape(detail.total_posts)}")
+    if detail.apply_start_date:
+        lines.append(f"🟢 *{H['start_date']}:* {md_escape(detail.apply_start_date)}")
+    if detail.apply_last_date:
+        lines.append(f"🔴 *{H['last_date']}:* {md_escape(detail.apply_last_date)}")
+    qualification = detail.qualification or detail.eligibility
+    if qualification:
+        lines.append(f"🎓 *{H['qualification']}:* {md_escape(qualification[:220])}")
+    if detail.fee:
+        lines.append(f"💳 *{H['fee']}:* {md_escape(detail.fee)}")
+    if detail.min_age or detail.max_age:
+        lines.append(
+            f"📆 *{H['age_limit']}:* {detail.min_age or '—'} – {detail.max_age or '—'} Yrs"
+        )
+    if detail.ai_summary_hi:
+        lines.append("")
+        lines.append(f"🧠 *{H['qualification']}:* {md_escape(detail.ai_summary_hi)}")
+    return lines
 
 
 def job_card(
@@ -116,54 +172,66 @@ def job_card(
     detail: JobDetail | None,
     profile: UserProfile,
     age_info: dict | None = None,
+    language: str | None = None,
 ) -> str:
     """Full MarkdownV2 card for a text message (up to 4096 chars)."""
     detail = detail or JobDetail()
+    language = (language or config.CARD_LANGUAGE or "en").lower()
     top = [
         "🔔 *NEW SARKARI JOB MATCH*",
         DIVIDER,
         f"📝 {link(job.title, job.url)}",
     ]
     if detail.organization:
-        top.append(f"🏢 {bold('Organisation:')} {md_escape(detail.organization)}")
-    if detail.exam_name and detail.exam_name != detail.organization:
-        top.append(f"🗂 {bold('Exam:')} {md_escape(detail.exam_name)}")
+        top.append(f"🏢 *Organisation:* {md_escape(detail.organization)}")
+    state = _state_line(detail)
+    if state:
+        top.append(f"📍 *State:* {state}")
+    meta: list[str] = []
     if detail.post_date:
-        top.append(f"📅 {bold('Notification Date:')} {md_escape(detail.post_date)}")
+        meta.append(f"📅 *Notification:* {md_escape(detail.post_date)}")
     if detail.total_posts:
-        top.append(f"👥 {bold('Total Posts:')} {md_escape(detail.total_posts)}")
+        meta.append(f"👥 *Total Posts:* {md_escape(detail.total_posts)}")
+    if meta:
+        top.append(" · ".join(meta))
     if detail.selection_process:
-        top.append(
-            f"🧭 {bold('Selection Process:')} {md_escape(detail.selection_process)}"
-        )
+        top.append(f"🧭 *Selection:* {md_escape(detail.selection_process)}")
     if detail.application_mode:
-        top.append(f"💻 {bold('Apply Mode:')} {md_escape(detail.application_mode)}")
+        top.append(f"💻 *Apply Mode:* {md_escape(detail.application_mode)}")
 
     date_lines = _dates_block(detail)
     if date_lines:
-        top.append("")
-        top.append(f"🗓 {bold('Important Dates')}")
+        top.append(f"🗓 *Important Dates*")
         top.extend(date_lines)
 
     # --- qualification (full text, exactly as published) ------------------
     middle: list[str] = []
     qualification = detail.qualification or detail.eligibility
     if qualification:
-        middle.append("")
-        middle.append(f"🎓 {bold('Qualification:')}")
+        middle.append(f"🎓 *Qualification:*")
         middle.append(md_escape(qualification.strip()))
 
     bottom: list[str] = []
     if detail.salary:
-        bottom.append(f"💰 {bold('Salary / Pay:')} {md_escape(detail.salary)}")
+        bottom.append(f"💰 *Salary / Pay:* {md_escape(detail.salary)}")
     if detail.fee:
-        bottom.append(f"💳 {bold('Application Fee:')} {md_escape(detail.fee)}")
+        bottom.append(f"💳 *Application Fee:* {md_escape(detail.fee)}")
     bottom.append(_age_line(detail, profile, age_info))
+
+    breakdown = _breakdown_line(detail, profile)
+    if breakdown:
+        bottom.append(f"👥 *Posts by category:* {breakdown}")
 
     doc_lines = _documents_block(detail, profile)
     if doc_lines:
-        bottom.append("")
         bottom.extend(doc_lines)
+
+    if detail.ai_summary:
+        bottom.append(f"🧠 *In short:* {md_escape(detail.ai_summary)}")
+
+    if language in {"hi", "both"}:
+        bottom.append("")
+        bottom.extend(_hindi_block(detail, profile, age_info))
 
     bottom.append(DIVIDER)
     if detail.apply_url:
@@ -176,8 +244,7 @@ def job_card(
     if detail.short_notice:
         detail_links.append(link("📰 Short Notice", detail.short_notice))
     bottom.append("  ·  ".join(detail_links))
-    bottom.append(DIVIDER)
-    bottom.append(f"🤖 Managed by {md_escape(config.OWNER_HANDLES)}")
+    bottom.append(f"🤖 {md_escape(config.OWNER_HANDLES)}")
     return _assemble(top, middle, bottom, TELEGRAM_LIMIT)
 
 
@@ -220,6 +287,7 @@ def photo_caption(
     detail: JobDetail | None,
     profile: UserProfile,
     age_info: dict | None = None,
+    language: str | None = None,
 ) -> str:
     """Compact MarkdownV2 caption - Telegram photo captions are capped at 1024."""
     detail = detail or JobDetail()

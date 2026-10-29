@@ -1,24 +1,68 @@
-"""Periodic scrape -> match -> notify pipeline."""
+"""Periodic scrape -> match -> notify pipeline.
+
+Besides the normal "new job" alerts the monitor now watches live notices for
+changes (admit card published, exam date fixed, last date extended) and runs
+a daily digest, so the bot never feels silent.
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
-from bot import config, matcher
+from bot import ai, config, matcher
 from bot.cards import job_card, photo_caption
 from bot.keyboards import job_action_keyboard, job_detail_keyboard
 from bot.models import JobSummary, UserProfile
 from bot.scraper import ScraperError
+from bot.utils import bold, link, md_escape
 
 logger = logging.getLogger(__name__)
 
 BOOTSTRAP_FLAG = "bootstrap_v2_done"
 OWNER_ALERT_AFTER_FAILURES = 2
 OWNER_ALERT_COOLDOWN_SECONDS = 3 * 3600
+
+# Notice fields that are worth an update alert when they change.
+WATCHED_FIELDS = (
+    ("apply_last_date", "🔴 Apply Last Date"),
+    ("apply_start_date", "🟢 Apply Start Date"),
+    ("exam_date", "📝 Exam Date"),
+    ("admit_card_date", "🎫 Admit Card"),
+    ("result_date", "🏁 Result Date"),
+    ("total_posts", "👥 Total Posts"),
+)
+
+# Values that mean "not announced yet" - they never trigger an update.
+PLACEHOLDERS = {
+    "", "notify later", "will be updated here soon", "tbd", "to be announced",
+    "not disclosed", "check official notification", "na", "n/a", "-",
+}
+
+
+def _is_placeholder(value: str | None) -> bool:
+    if not value:
+        return True
+    return value.strip().lower() in PLACEHOLDERS
+
+
+def detect_changes(old, new) -> list[tuple[str, str, str]]:
+    """Fields that changed from a placeholder (or value) to a new value."""
+    changes: list[tuple[str, str, str]] = []
+    for field, label in WATCHED_FIELDS:
+        before = getattr(old, field, "") or ""
+        after = getattr(new, field, "") or ""
+        if before == after:
+            continue
+        if _is_placeholder(before) and not _is_placeholder(after):
+            changes.append((label, before or "Not announced", after))
+        elif not _is_placeholder(after):
+            changes.append((label, before or "-", after))
+    return changes
 
 
 class JobMonitor:
@@ -79,6 +123,7 @@ class JobMonitor:
                 continue
             try:
                 detail = await self.scraper.fetch_job_detail(job.url)
+                detail = await self._enrich(detail)
                 await self.db.mark_detail_fetched(job.job_id, detail)
                 details[job.job_id] = detail
             except Exception:
@@ -111,6 +156,71 @@ class JobMonitor:
                 await asyncio.sleep(0.06)  # stay under Telegram's 30 msg/s
         logger.info("Cycle complete: %d pending jobs, %d alerts sent", len(pending), sent)
 
+        # 4. Watch live notices for changes (admit card, exam date, extension)
+        try:
+            await self._watch_for_updates(users)
+        except Exception:  # noqa: BLE001
+            logger.exception("Watch-list check failed")
+
+    async def _enrich(self, detail):
+        """Add the optional AI summary to a freshly fetched notice."""
+        if detail is None or not ai.enabled():
+            return detail
+        text = detail.qualification or detail.eligibility
+        if not text:
+            return detail
+        detail.ai_summary = await ai.summarise(text, "en")
+        if config.CARD_LANGUAGE in {"hi", "both"}:
+            detail.ai_summary_hi = await ai.summarise(text, "hi")
+        return detail
+
+    # ------------------------------------------------------------- watch list
+    async def _watch_for_updates(self, users: list[UserProfile]) -> None:
+        """Re-check recent notices: admit card published, last date extended."""
+        candidates = await self.db.list_recent_jobs(
+            days=config.WATCH_WINDOW_DAYS, limit=config.WATCH_JOBS_PER_RUN
+        )
+        for job in candidates:
+            old = await self.db.get_job_detail(job.job_id)
+            if old is None:
+                continue
+            try:
+                new = await self.scraper.fetch_job_detail(job.url)
+            except Exception:  # noqa: BLE001 - page temporarily unreachable
+                continue
+            changes = detect_changes(old, new)
+            if not changes:
+                continue
+            logger.info("Update for %s: %s", job.job_id, changes)
+            # keep the AI summary we already paid for
+            new.ai_summary = new.ai_summary or old.ai_summary
+            new.ai_summary_hi = new.ai_summary_hi or old.ai_summary_hi
+            await self.db.mark_detail_fetched(job.job_id, new)
+            await self._notify_update(job, new, changes)
+            await asyncio.sleep(config.REQUEST_DELAY_SECONDS)
+
+    async def _notify_update(self, job: JobSummary, detail, changes) -> None:
+        """Tell everyone who already got this job that the notice changed."""
+        recipients = await self.db.notified_users(job.job_id)
+        if not recipients:
+            return
+        lines = ["🔔 *NOTICE UPDATED*", "━━━━━━━━━━━━━━━"]
+        for label, before, after in changes:
+            lines.append(f"• {bold(label + ':')} {md_escape(before)} → *{md_escape(after)}*")
+        lines.append(f"📝 {link(job.title, job.url)}")
+        lines.append("━━━━━━━━━━━━━━━")
+        text = "\n".join(lines)
+        for user_id in recipients:
+            try:
+                await self.bot.send_message(
+                    chat_id=user_id, text=text, parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=job_detail_keyboard(job, detail),
+                    disable_web_page_preview=True,
+                )
+            except TelegramError:
+                logger.exception("Update alert failed for %s", user_id)
+
+    # --------------------------------------------------------------- notify
     async def _notify(self, user: UserProfile, job: JobSummary,
                       detail, age_info) -> bool:  # noqa: ANN001
         keyboard = (
@@ -158,7 +268,28 @@ class JobMonitor:
             logger.exception("Failed to send alert to %s", user.user_id)
             return False
         await self.db.mark_notified(user.user_id, job.job_id)
+        await self._maybe_post_to_channel(job, detail)
         return True
+
+    async def _maybe_post_to_channel(self, job: JobSummary, detail) -> None:
+        """Mirror every new job into the owner's broadcast channel."""
+        channel = config.BROADCAST_CHANNEL_ID
+        if not channel:
+            return
+        posted = self.app.bot_data.setdefault("channel_posted", set())
+        if job.job_id in posted:
+            return
+        posted.add(job.job_id)
+        try:
+            text = job_card(job, detail, _guest(), None)
+            await self.bot.send_message(
+                chat_id=channel, text=text, parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=job_detail_keyboard(job, detail),
+                disable_web_page_preview=True,
+            )
+            logger.info("Posted %s to broadcast channel", job.job_id)
+        except TelegramError:
+            logger.exception("Could not post to broadcast channel %s", channel)
 
     async def _maybe_alert_owners(self, error: str) -> None:
         """Tell owners once (with cooldown) when all scrape sources are down."""
@@ -186,6 +317,15 @@ class JobMonitor:
                 await self.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
             except TelegramError:
                 logger.exception("Could not deliver owner alert to %s", chat_id)
+
+
+def _guest():
+    from bot.models import UserProfile
+
+    return UserProfile(
+        user_id=0, username=None, full_name="Guest", category="UR",
+        qualification="graduate", sectors=[], dob=None,
+    )
 
 
 def _md(text: str) -> str:

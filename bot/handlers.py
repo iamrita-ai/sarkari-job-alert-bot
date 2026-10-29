@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -30,6 +30,7 @@ from bot.cards import (
 )
 from bot.constants import (
     CATEGORY_MAP,
+    STATE_MAP,
     DEGREE_MAP,
     DEGREE_KEYS,
     DOCUMENT_KEYS,
@@ -44,6 +45,7 @@ from bot.constants import (
     SECTOR_KEYS,
 )
 from bot.keyboards import (
+    BLUE,
     admin_profile_keyboard,
     admin_users_keyboard,
     category_keyboard,
@@ -52,10 +54,12 @@ from bot.keyboards import (
     get_started_keyboard,
     main_menu_keyboard,
     profile_edit_keyboard,
+    resume_setup_keyboard,
     sectors_keyboard,
 )
 from bot.scraper import ScraperError
 from bot.utils import decode_job_id, md_escape, parse_dob
+from bot.webapp import sign_token
 
 logger = logging.getLogger(__name__)
 
@@ -524,6 +528,7 @@ async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Please create your profile first with /start so I know what to match."
         )
         return
+    state_filter = _state_filter(context.args)
     status = await update.effective_message.reply_text("🔎 Fetching the latest jobs…")
     try:
         jobs = await _scraper(context).fetch_latest_jobs()
@@ -534,11 +539,42 @@ async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     matched = [job for job in jobs if matcher.title_matches(profile, job)]
+    heading = "Latest Matching Jobs"
+    if state_filter:
+        matched = await _filter_by_state(context, matched, state_filter)
+        heading = f"Latest Jobs · {STATE_MAP[state_filter]['label']}"
     await status.edit_text(f"✅ {len(matched)} matching jobs — use Next / Previous to browse.")
     await open_browser(
         update, context, profile.user_id, matched,
-        kind="latest", heading="Latest Matching Jobs",
+        kind="latest", heading=heading,
     )
+
+
+def _state_filter(args) -> str | None:
+    """Turn '/latest bihar' into the internal state key."""
+    if not args:
+        return None
+    query = " ".join(args).strip().lower()
+    if not query:
+        return None
+    for key, state in STATE_MAP.items():
+        if query in {key, key.replace("_", " ")} or query in state["label"].lower():
+            return key
+    for key, state in STATE_MAP.items():
+        if any(alias in query for alias in state["aliases"]):
+            return key
+    return None
+
+
+async def _filter_by_state(context, jobs, state_key: str) -> list:
+    """Keep only the vacancies published for one state."""
+    db = _db(context)
+    kept = []
+    for job in jobs:
+        detail = await db.get_job_detail(job.job_id)
+        if detail and state_key in (detail.states or []):
+            kept.append(job)
+    return kept
 
 
 # ------------------------------------------------------------------ menu taps
@@ -657,6 +693,67 @@ def _split_for_telegram(text: str, limit: int = 3900) -> list[str]:
     return chunks
 
 
+async def orphaned_setup_callback(update: Update,
+                                   context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A setup button was tapped but the conversation no longer exists.
+
+    This happens after a restart, or when a *second* instance of the bot
+    (same token) receives the tap while the conversation lives in the other
+    process. Ignoring the tap makes the bot look broken, so we always
+    answer and offer a one-tap way back.
+    """
+    query = update.callback_query
+    await query.answer("Session expired - please tap below", show_alert=True)
+    profile = None
+    try:
+        profile = await _db(context).get_user(query.from_user.id)
+    except Exception:  # noqa: BLE001 - the reply must go out anyway
+        logger.exception("Could not read the profile for the expired session")
+    if profile:
+        await query.message.reply_markdown_v2(
+            "⌛ *Your setup session expired*\\.\\n\\n"
+            "That happens after a bot restart or when two instances run with "
+            "the same token\\. Your profile is safe — tap *Edit Profile* to "
+            "change anything, or *Get Started* to continue where you left off\\.",
+            reply_markup=resume_setup_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+    await query.message.reply_markdown_v2(
+        "⌛ *Your setup session expired*\\.\\n\\n"
+        "Tap *Get Started* and we will begin again — it only takes a minute\\.",
+        reply_markup=resume_setup_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Personal link to the web dashboard."""
+    secret = config.WEB_APP_SECRET
+    if not secret:
+        await update.message.reply_text(
+            "🌐 The web dashboard is not enabled on this deployment\\."
+        )
+        return
+    base = config.PUBLIC_BASE_URL.rstrip("/")
+    if not base:
+        await update.message.reply_text(
+            "🌐 Set `PUBLIC_BASE_URL` (your public domain) to use the dashboard\\."
+        )
+        return
+    token = sign_token(update.effective_user.id, secret)
+    await update.message.reply_markdown_v2(
+        "🌐 *Your personal dashboard*\n\n"
+        "Open it on your phone to edit degrees/documents and browse the "
+        "latest vacancies with filters\\.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🚀 Open Dashboard", url=f"{base}/?t={token}",
+                                 style=BLUE)
+        ]]),
+        disable_web_page_preview=True,
+    )
+
+
 async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data.get("draft") or context.user_data.get("reminder_job_id"):
         return  # a conversation handler owns this input
@@ -723,6 +820,52 @@ async def admin_scrape_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         update, context, update.effective_user.id, all_jobs,
         kind="all", heading="All Catalogued Jobs",
     )
+
+
+async def admin_digest_preview(update: Update,
+                               context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner preview of the daily digest."""
+    if not _is_owner(update):
+        await update.message.reply_text("🚫 Owner-only command.")
+        return
+    from bot.digest import build_digest
+
+    profile = await _db(context).get_user(update.effective_user.id)
+    if profile is None:
+        await update.message.reply_text("You have no profile - send /start first.")
+        return
+    text = await build_digest(context.application, profile)
+    if not text:
+        await update.message.reply_text(
+            "📭 Nothing to report right now (no new jobs, nothing closing)."
+        )
+        return
+    await update.message.reply_markdown_v2(text, disable_web_page_preview=True)
+
+
+async def admin_channel_test(update: Update,
+                              context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner: post a test message into the broadcast channel."""
+    if not _is_owner(update):
+        await update.message.reply_text("🚫 Owner-only command.")
+        return
+    channel = config.BROADCAST_CHANNEL_ID
+    if not channel:
+        await update.message.reply_text(
+            "📢 Set `BROADCAST_CHANNEL_ID` (e.g. @your_channel) to enable it."
+        )
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=channel,
+            text="📢 *Channel connected*\nEvery new vacancy will be mirrored here "
+                 "automatically\\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+    except Exception as exc:  # noqa: BLE001
+        await update.message.reply_text(f"❌ Could not post: {exc}")
+        return
+    await update.message.reply_text(f"✅ Test message posted to {channel}\\.")
 
 
 async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -920,6 +1063,32 @@ async def admin_users_callback(update: Update,
         return
 
 
+async def _alert_duplicate_instance(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tell the owners that a second instance is eating the updates."""
+    app = context.application
+    owner_ids: set[int] = app.bot_data.get("owner_chat_ids", set())
+    if not owner_ids:
+        return
+    last = app.bot_data.get("last_duplicate_alert")
+    now = __import__("time").monotonic()
+    if last is not None and now - last < 1800:
+        return
+    app.bot_data["last_duplicate_alert"] = now
+    text = (
+        "🚨 *Duplicate instance detected*\n\n"
+        "Another bot instance is polling with the same token, so Telegram is "
+        "splitting the updates between them — that is why buttons sometimes "
+        "look dead and the bot feels silent\\.\\n\\n"
+        "✅ Stop every other copy \\(cloud service, Termux, local run\\) and "
+        "keep exactly one running\\."
+    )
+    for chat_id in owner_ids:
+        try:
+            await app.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not deliver the duplicate-instance alert")
+
+
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Last-resort guard: log the failure and keep the bot alive."""
     from telegram.error import Conflict, NetworkError, TimedOut
@@ -931,6 +1100,7 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
             "Polling conflict: another instance is using this token. Stop the "
             "duplicate deployment (only ONE bot instance can run per token)."
         )
+        await _alert_duplicate_instance(context)
         return
     if isinstance(error, (NetworkError, TimedOut)):
         logger.warning("Telegram network hiccup: %s", error)
@@ -966,6 +1136,11 @@ def register_handlers(app: Application) -> None:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
+        # Persist the conversation state so a button tapped after a restart
+        # (or a redeploy) still works instead of dying silently. Only possible
+        # when the application has a persistence attached (see bot/main.py).
+        name="onboarding",
+        persistent=app.persistence is not None,
     )
     app.add_handler(conversation)
 
@@ -981,6 +1156,9 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("scrape_now", admin_scrape_now))
     app.add_handler(CommandHandler("sources", admin_sources))
     app.add_handler(CommandHandler("users", admin_users))
+    app.add_handler(CommandHandler("webapp", webapp_command))
+    app.add_handler(CommandHandler("digest", admin_digest_preview))
+    app.add_handler(CommandHandler("channel", admin_channel_test))
 
     app.add_handler(TypeHandler(Update, track_owner), group=-1)
     app.add_handler(CallbackQueryHandler(menu_handler, pattern="^menu:"))
@@ -989,5 +1167,9 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(browser_callback, pattern="^br:"))
     app.add_handler(CallbackQueryHandler(full_text_callback, pattern="^full:"))
     app.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^adm:"))
+    # A setup button that arrives without a live conversation (restart or a
+    # duplicate instance) must never be ignored silently.
+    app.add_handler(CallbackQueryHandler(orphaned_setup_callback,
+                                         pattern="^(cat|deg|doc|sec|pe):"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
     app.add_error_handler(global_error_handler)
