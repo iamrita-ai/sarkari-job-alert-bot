@@ -56,7 +56,10 @@ def test_conversation_states_are_still_persisted(tmp_path):
     assert stored[(123, "chat")] == 2
 
 
-def test_health_server_starts_on_the_configured_port(monkeypatch):
+def test_health_server_starts_on_exactly_one_port(monkeypatch):
+    """Voroa aborts the deploy when the service listens on more than one port
+    ("your service is listening on more than one port (8000, 8080)"), so the
+    bot must open exactly ONE socket - the port the platform provides."""
     started: list[int] = []
 
     class _FakeServer:
@@ -72,8 +75,9 @@ def test_health_server_starts_on_the_configured_port(monkeypatch):
     monkeypatch.setattr(bot_main.config, "PORT", 8080)
     bot_main._RUNTIME.pop("health_servers", None)
     bot_main._start_health_servers()
-    assert started[0] == 8080
-    assert 8000 in started  # fallbacks for platforms that pick another port
+    assert started == [8080], started
+    # no extra fallback sockets - they made Voroa abort the deployment
+    assert 8000 not in started and 8081 not in started
 
 
 def test_bot_restarts_instead_of_dying_on_a_duplicate_instance(monkeypatch):

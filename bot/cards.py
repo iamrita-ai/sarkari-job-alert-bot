@@ -18,10 +18,9 @@ from bot.constants import (
     DOCUMENT_MAP,
     QUAL_MAP,
 )
+from bot.branding import DIVIDER, ICON_ALERT, ICON_SPARK
 from bot.models import JobDetail, JobSummary, UserProfile
 from bot.utils import bold, code, link, md_escape
-
-DIVIDER = "━━━━━━━━━━━━━━━━━━"
 NOT_DISCLOSED = "Check official notification"
 TELEGRAM_LIMIT = 4096
 CAPTION_LIMIT = 1024
@@ -178,7 +177,7 @@ def job_card(
     detail = detail or JobDetail()
     language = (language or config.CARD_LANGUAGE or "en").lower()
     top = [
-        "🔔 *NEW SARKARI JOB MATCH*",
+        f"{ICON_SPARK} *{config.BRAND_NAME} MATCH — NEW JOB FOR YOU*",
         DIVIDER,
         f"📝 {link(job.title, job.url)}",
     ]
@@ -292,7 +291,7 @@ def photo_caption(
     """Compact MarkdownV2 caption - Telegram photo captions are capped at 1024."""
     detail = detail or JobDetail()
     top = [
-        "🔔 *NEW SARKARI JOB MATCH*",
+        f"{ICON_SPARK} *{config.BRAND_NAME} MATCH — NEW JOB FOR YOU*",
         f"📝 {link(job.title, job.url)}",
     ]
     if detail.organization:
@@ -431,11 +430,22 @@ def saved_list_card(saved: list, page: int, total_pages: int,
 
 
 def welcome_caption() -> str:
+    """The /start banner caption - what the bot does and why it is useful."""
     return (
-        f"🚀 *Welcome to {config.BRAND_NAME}*\n"
+        f"✨ *Welcome to {config.BRAND_NAME}*\n"
         f"{DIVIDER}\n"
-        "I watch the government job portals around the clock and message you the "
-        "moment a job matches your profile\\.\n\n"
+        "I keep an eye on the government job portals around the clock and the "
+        "moment a vacancy fits *your* profile, the full card lands in your "
+        "chat\\.\n\n"
+        "💡 *Why this is useful for you*\n"
+        "• 🧾 Every new vacancy is checked for you \u2014 never scroll a job "
+        "portal again\n"
+        "• 🎯 Only the ones that fit your *age, category, degrees and "
+        "documents*\n"
+        "• 🎫 Admit card, exam date and last\\-date changes reach you first\n"
+        "• ⏰ A reminder before every deadline \u2014 nothing slips\n"
+        "• 🗂️ Admit cards, results, saved jobs and a daily digest in one place\n"
+        "• 💬 A human \\(the owner\\) reads every bug report and suggestion\n\n"
         "Tap the button below to create your profile in 6 quick steps "
         "\\(name, D\\.O\\.B, category, degrees, documents, job choices\\)\\."
     )
@@ -451,8 +461,8 @@ def help_text() -> str:
         "job types\n"
         "   • /edit — change any answer later\n"
         "*2\\. Get matched alerts*\n"
-        "   I check the job portals around the clock \(every 30 minutes by "
-        "default\) and send the full card the moment a vacancy fits your age, "
+        "   I check the job portals around the clock \\(every 30 minutes by "
+        "default\\) and send the full card the moment a vacancy fits your age, "
         "category, degrees and documents\\.\n"
         "*3\\. Browse whenever you want*\n"
         "   • /latest — jobs that match you \\(Next / Previous\\)\n"
@@ -468,6 +478,7 @@ def help_text() -> str:
         "   • /profile — see your preferences\n"
         "   • /digest — today\'s summary on demand\n"
         "*6\\. Need a hand?*\n"
+        "   • /why — why this bot is useful for *you*\n"
         "   • /contact — report a bug, send a suggestion or offer to help\n"
         "   • /about — bot info and owners\n"
         f"{DIVIDER}\n"

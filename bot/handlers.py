@@ -239,12 +239,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if profile:
         await _send_banner(
             update.message,
-            f"Welcome back, {md_escape(profile.full_name)} 👋\n\n" + profile_card(profile),
+            f"✨ *Welcome back, {md_escape(profile.full_name)}* 👋\n\n"
+            + profile_card(profile),
             main_menu_keyboard(profile.active),
         )
+        await _send_sticker(update, context)
         return ConversationHandler.END
 
     await _send_banner(update.message, welcome_caption(), get_started_keyboard())
+    await _send_sticker(update, context)
     return ConversationHandler.END
 
 
@@ -726,6 +729,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await admit_cards(update, context)
     elif action == "result":
         await results(update, context)
+    elif action == "why":
+        await why_useful(update, context)
     elif action == "contact":
         await _contact_prompt(query.message)
     elif action == "saved":
@@ -1030,6 +1035,76 @@ async def digest_job_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await db.is_saved(target.user_id, job_id) if profile else False,
         ),
         disable_web_page_preview=True,
+    )
+
+
+async def _send_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the branded sticker (only when one is configured)."""
+    from bot.stickers import welcome_sticker
+
+    try:
+        await welcome_sticker(context.bot, update.effective_chat.id)
+    except Exception:  # noqa: BLE001 - a sticker must never break /start
+        logger.exception("Could not send the welcome sticker")
+
+
+async def why_useful(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """"Why is this bot useful for you" - personalised with the profile."""
+    db = _db(context)
+    profile = await db.get_user(update.effective_user.id)
+    if not profile:
+        await update.effective_message.reply_text(
+            "Send /start first \u2014 then I can show you exactly what I will "
+            "do for you\\."
+        )
+        return
+    jobs = await db.list_jobs(limit=200)
+    matched = [job for job in jobs if matcher.title_matches(profile, job)]
+
+    from bot.constants import CATEGORY_MAP, DEGREE_MAP
+    from bot.utils import parse_dob
+
+    age = None
+    if profile.dob:
+        born = parse_dob(profile.dob)
+        if born:
+            from datetime import date
+            today = date.today()
+            age = today.year - born.year - ((today.month, today.day)
+                                             < (born.month, born.day))
+    category = CATEGORY_MAP.get(profile.category, profile.category)
+    degrees = ", ".join(
+        DEGREE_MAP.get(d, {}).get("label", d) for d in profile.degrees
+    ) or "not set"
+    sectors = ", ".join(profile.sectors) or "not set"
+
+    from bot.cards import DIVIDER
+
+    lines = [
+        f"💡 *Why {config.BRAND_NAME} is useful for you*",
+        DIVIDER,
+        f"👤 *Your profile:* {md_escape(category)}"
+        + (f" · {age} yrs" if age else "")
+        + f" · {md_escape(degrees)} · {md_escape(sectors)}",
+        "",
+        f"🧾 *{len(jobs)}* vacancies are tracked live and I check them every "
+        f"{int(config.CHECK_INTERVAL_MINUTES)} minutes\\.",
+        f"🎯 *{len(matched)}* of them match your sectors right now \u2014 open "
+        "*/latest* to see them\\.",
+        "🎫 I also push you the *admit card*, *exam date* and *last date* "
+        "changes of every job you already got\\.",
+        "⏰ Tap 🔖 on a card to save it and ⏰ to get a reminder before the "
+        "deadline\\.",
+        "🗂️ Everything else lives in one place: */admit* · */result* · "
+        "*/saved* · */digest*\\.",
+        "💬 *Need a human?* */contact* sends your message straight to the "
+        "owner\\.",
+        "",
+        "*That is the whole point: you apply to the right jobs, in time, "
+        "without spending hours on job portals\\.*",
+    ]
+    await update.effective_message.reply_markdown_v2(
+        "\n".join(lines), disable_web_page_preview=True
     )
 
 
@@ -1437,6 +1512,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("admit", admit_cards))
     app.add_handler(CommandHandler("result", results))
     app.add_handler(CommandHandler("contact", contact_owner))
+    app.add_handler(CommandHandler("why", why_useful))
     app.add_handler(CommandHandler("reply", owner_reply))
 
     app.add_handler(CommandHandler("stats", admin_stats))

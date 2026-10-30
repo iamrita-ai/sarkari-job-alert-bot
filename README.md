@@ -155,6 +155,7 @@ PTB JobQueue (every N min)
 | `/latest` | Browse matching jobs with Next / Previous pagination |
 | `/admit` | Latest admit cards (Previous / Next browser) |
 | `/result` | Latest results (Previous / Next browser) |
+| `/why` | Why SERENA is useful for **you** (personalised) |
 | `/contact [message]` | Report a bug, send a suggestion — forwarded to the owner |
 | `/saved` | Bookmarked jobs and your active date reminders |
 | `/pause` / `/resume` | Stop / restart automatic alerts |
@@ -265,6 +266,23 @@ sarkari-job-alert-bot/
 ```
 
 ### 📦 Release notes
+
+- **v1.6.1** — *deploy fix + premium polish*:
+  - **Voroa deploy fix**: the bot listened on `PORT` **and** 8000/8080/3000,
+    so Voroa aborted the deployment (*"your service is listening on more than
+    one port"*). The service now opens **exactly one** socket — the port the
+    platform provides — and the web dashboard shares that same port
+  - **Nothing gets missed any more**: every 6th cycle (and every cycle after
+    a failure) the bot reads **all** reachable sources and merges them, so a
+    notice that only one source carries is still catalogued and alerted. Each
+    source is capped at the 120 freshest jobs
+  - **Premium look**: a branded SERENA card header, a richer welcome message
+    and an optional **sticker greeting** (a bot may only use the $ custom
+    emoji of a pack it owns — so the sticker set is the premium route:
+    `python scripts/create_sticker_set.py <user_id>`)
+  - **`/why`** — a personalised answer to *"why is this bot useful for me?"*
+    (your age, category, degrees, sectors and how many live vacancies match
+    you right now), also in the main menu
 
 - **v1.6.0** — *production polish*:
   - **More fallback sources**: the chain is now
@@ -468,6 +486,10 @@ docker run -d --name sarkari-bot \
 | `WEB_APP_SECRET` | — | Secret that signs the personal dashboard links |
 | `PUBLIC_BASE_URL` | — | Public address of the deployment (dashboard links) |
 | `WEB_APP_PORT` | `PORT` | Dashboard port — leave empty, the platform port is used |
+| `MAX_LISTING_JOBS` | `120` | Freshest jobs taken from one source |
+| `SWEEP_EVERY_CYCLES` | `6` | How often all sources are merged (1 = always) |
+| `STICKER_SET_NAME` | — | Sticker set the bot owns (the "premium" greeting) |
+| `WELCOME_STICKER_FILE_ID` | — | One sticker sent with the welcome message |
 | `DIGEST_ENABLED` | `true` | Send the daily 09:05 IST digest |
 | `DIGEST_HOUR` | `9` | Hour of the daily digest (IST) |
 | `CARD_LANGUAGE` | `both` | `en`, `hi` or `both` (Hindi block under the card) |

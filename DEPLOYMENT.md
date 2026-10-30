@@ -391,6 +391,25 @@ category, degrees, documents and sectors.
 > ⚠️ `WEB_APP_PORT=8081` (the old default) made the dashboard unreachable on
 > Render/Voroa — the platform only forwards `PORT`. Leave the variable empty.
 
+### Stickers — the "premium" greeting (v1.6.1)
+
+Telegram only lets a bot use the **$ custom emoji** of a sticker pack it
+owns, so the premium look is done with a sticker set the bot owns:
+
+```bash
+python scripts/create_sticker_set.py <your_telegram_user_id>
+# -> Sticker set ready: serena_by_serena_bot
+```
+
+Put the printed name into your environment:
+
+```bash
+STICKER_SET_NAME=serena_by_serena_bot
+```
+
+From then on every `/start` is answered with the banner **and** a random
+sticker of that set. (The bot also accepts a single `WELCOME_STICKER_FILE_ID`.)
+
 ### Bot profile picture & banner (v1.6)
 
 Telegram does **not** let a bot set its own avatar: open **@BotFather** →

@@ -36,8 +36,9 @@ RUN mkdir -p /app/data \
 
 USER appuser
 
-# Render / getvoroa health check (served by bot/health.py) + optional dashboard
+# Render / getvoroa health check (served by bot/health.py). The optional web
+# dashboard uses the SAME port (PORT) - a service must listen on exactly one
+# port, otherwise Voroa aborts the deployment.
 EXPOSE 8080
-EXPOSE 8081
 
 CMD ["python", "-m", "bot.main"]

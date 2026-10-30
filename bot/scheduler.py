@@ -72,6 +72,7 @@ class JobMonitor:
         self.scraper = application.bot_data["scraper"]
         self.bot = application.bot
         self._lock = asyncio.Lock()
+        self._cycles = 0
 
     async def periodic_check(self, context=None) -> None:  # noqa: ANN001
         """JobQueue entry point. Skips overlapping runs."""
@@ -85,9 +86,17 @@ class JobMonitor:
                 logger.exception("Job monitor cycle failed")
 
     async def _run_cycle(self) -> None:
-        # 1. Refresh the listing(s) through the source chain
+        # 1. Refresh the listing(s) through the source chain.
+        #    Every few cycles (and after a failure) ALL reachable sources are
+        #    read and merged, so a notice that only one source carries is
+        #    never missed.
+        self._cycles += 1
+        sweep = (config.SWEEP_EVERY_CYCLES > 0
+                 and self._cycles % config.SWEEP_EVERY_CYCLES == 0)
+        if self.scraper.status.get("consecutive_failures"):
+            sweep = True  # recover whatever the failed cycle missed
         try:
-            jobs = await self.scraper.fetch_latest_jobs()
+            jobs = await self.scraper.fetch_latest_jobs(merge_all=sweep)
         except ScraperError as exc:
             logger.error("Every listing source failed: %s", exc)
             await self._maybe_alert_owners(str(exc))

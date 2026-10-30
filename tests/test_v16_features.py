@@ -458,3 +458,134 @@ def test_mirror_markdown_parser_reads_the_reader_proxy():
     assert len(jobs) == 1
     assert jobs[0].title.startswith("Railway RRB Station Master 2026")
     assert jobs[0].last_date == "25/11/2026"
+
+
+# --------------------------------------------------- v1.6.1 (deploy + polish)
+def test_why_command_is_personalised_and_lint_clean(tmp_path):
+    """/why explains what the bot does FOR THIS user."""
+    from telegram.ext import Application
+
+    from bot import handlers
+    from tests.test_markdown_lint import lint_markdown_v2
+
+    recorder = _Recorder()
+    orig = _patch_bot(recorder)
+    try:
+        async def run():
+            app = Application.builder().token("123:TEST").build()
+            db = Database(str(tmp_path / "why.db"))
+            await db.connect()
+            await db.upsert_user(555, "rahul", "Rahul", "OBC", "graduate",
+                                 ["railway"], "15/08/2000", ["b_ed"], ["aadhaar"])
+            await db.upsert_jobs([JOB])
+            app.bot_data["db"] = db
+            update = _user()
+            update.set_bot(app.bot)
+            update.message.set_bot(app.bot)
+            context = app.context_types.context.from_update(update, app)
+            await handlers.why_useful(update, context)
+            await db.close()
+        asyncio.run(run())
+    finally:
+        _restore_bot(orig)
+    assert recorder.sent, "/why did not answer"
+    text = recorder.sent[-1][1]
+    assert "useful for you" in text
+    assert "OBC" in text
+    problems = lint_markdown_v2(text)
+    assert not problems, problems
+
+
+def test_health_server_listens_on_exactly_one_port(monkeypatch):
+    """Voroa aborts the deploy when the service listens on more than one port."""
+    import bot.main as bot_main
+
+    started: list[int] = []
+
+    class _FakeServer:
+        def shutdown(self):
+            pass
+
+    def fake_start(port, status_provider=None):
+        started.append(port)
+        return _FakeServer()
+
+    monkeypatch.setattr(bot_main, "start_health_server", fake_start)
+    monkeypatch.setattr(bot_main.config, "ENABLE_HEALTH_SERVER", True)
+    monkeypatch.setattr(bot_main.config, "PORT", 8080)
+    monkeypatch.setattr(bot_main.config, "ENABLE_WEB_APP", False)
+    bot_main._RUNTIME.pop("health_servers", None)
+    bot_main._start_health_servers()
+    assert started == [8080], started
+
+
+def test_listing_is_capped_per_source(monkeypatch):
+    """A source that serves the whole archive must not flood the catalogue."""
+    import asyncio
+
+    import bot.scraper as scraper
+
+    monkeypatch.setattr(scraper.config, "MAX_LISTING_JOBS", 5)
+
+    class _FakeScraper(scraper.SarkariScraper):
+        def __init__(self):
+            self.status = {}
+
+        async def _get(self, url):
+            return "<html><body></body></html>"
+
+    fake = _FakeScraper()
+    # 50 jobs come back from the parser -> only the 5 newest are kept
+    monkeypatch.setattr(scraper, "parse_mirror_listing_html",
+                        lambda html, url: [JobSummary(f"/job-{i}/", f"Job {i}",
+                                                      "https://x/y", None)
+                                           for i in range(50)])
+    jobs = asyncio.run(fake._fetch_listing_from_source("mirror"))
+    assert len(jobs) == 5
+
+
+def test_merge_sweep_combines_every_reachable_source():
+    """The sweep makes sure a notice only one source carries is not missed."""
+    import asyncio
+
+    import bot.scraper as scraper
+
+    class _FakeScraper(scraper.SarkariScraper):
+        def __init__(self):
+            self.status = {}
+            self.calls = []
+
+        async def _fetch_listing_from_source(self, source):
+            self.calls.append(source)
+            if source == "mirror":
+                return [JobSummary("/a/", "A", "https://x/a", None)]
+            if source == "mirror-jina":
+                return [JobSummary("/a/", "A", "https://x/a", None),
+                        JobSummary("/b/", "B", "https://x/b", None)]
+            raise scraper.ScraperError("blocked")
+
+    fake = _FakeScraper()
+    import bot.config as config
+    old_order = config.SOURCE_ORDER
+    config.SOURCE_ORDER = ["mirror", "mirror-jina", "original"]
+    try:
+        merged = asyncio.run(fake.fetch_latest_jobs(merge_all=True))
+    finally:
+        config.SOURCE_ORDER = old_order
+    ids = {job.job_id for job in merged}
+    assert ids == {"/a/", "/b/"}
+    assert "original" in fake.calls
+
+
+def test_sticker_greeting_is_optional(monkeypatch):
+    """Without a sticker configured the bot just does not send one."""
+    from bot import stickers
+
+    monkeypatch.setattr(stickers.config, "WELCOME_STICKER_FILE_ID", "")
+    monkeypatch.setattr(stickers.config, "STICKER_SET_NAME", "")
+
+    class _Bot:
+        async def send_sticker(self, **kwargs):
+            raise AssertionError("no sticker is configured")
+
+    assert asyncio.run(stickers.welcome_sticker(_Bot(), 1)) is None

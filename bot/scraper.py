@@ -1044,7 +1044,9 @@ class SarkariScraper:
             raise ScraperError(f"Unknown source '{source}'")
         if not jobs:
             raise ScraperError(f"Source '{source}' returned zero parseable jobs")
-        return jobs
+        # The listing is sorted newest first - keep only the freshest jobs so
+        # a source that serves the whole archive cannot flood the catalogue.
+        return jobs[:config.MAX_LISTING_JOBS]
 
     async def fetch_section(self, path: str) -> list[JobSummary]:
         """Latest notices of a section (admit cards, results, ...).
@@ -1063,8 +1065,17 @@ class SarkariScraper:
             raise ScraperError(f"Section '{path}' returned zero parseable jobs")
         return jobs
 
-    async def fetch_latest_jobs(self) -> list[JobSummary]:
+    async def fetch_latest_jobs(self, merge_all: bool = False) -> list[JobSummary]:
+        """The freshest listings.
+
+        By default the first source that answers wins (fast and polite). With
+        ``merge_all=True`` every reachable source is read and the results are
+        merged - that way a notice which only one source carries is never
+        missed, even while another source is degraded.
+        """
         errors: list[str] = []
+        merged: dict[str, JobSummary] = {}
+        winner: str | None = None
         for source in config.SOURCE_ORDER:
             try:
                 jobs = await self._fetch_listing_from_source(source)
@@ -1072,19 +1083,34 @@ class SarkariScraper:
                 logger.warning("Source %s failed: %s", source, exc)
                 errors.append(f"{source}: {exc}")
                 continue
-            logger.info("Fetched %d jobs via source '%s'", len(jobs), source)
-            self.status.update(
-                last_success_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                last_success_source=source,
-                last_error=None,
-                consecutive_failures=0,
-                last_cycle_jobs=len(jobs),
-            )
-            return jobs
+            if winner is None:
+                winner = source
+                logger.info("Fetched %d jobs via source '%s'", len(jobs), source)
+                if not merge_all:
+                    self._mark_success(source, len(jobs))
+                    return jobs
+            for job in jobs:
+                merged.setdefault(job.job_id, job)
+            logger.info("Merged %d jobs from source '%s'", len(jobs), source)
 
-        self.status["consecutive_failures"] += 1
-        self.status["last_error"] = " | ".join(errors)
-        raise ScraperError("All listing sources failed -> " + " | ".join(errors))
+        if not merged:
+            self.status["consecutive_failures"] += 1
+            self.status["last_error"] = " | ".join(errors)
+            raise ScraperError("All listing sources failed -> " + " | ".join(errors))
+
+        logger.info("Merged listing: %d jobs from %d source(s)", len(merged),
+                    len(config.SOURCE_ORDER) - len(errors))
+        self._mark_success(winner or "merged", len(merged))
+        return list(merged.values())
+
+    def _mark_success(self, source: str, count: int) -> None:
+        self.status.update(
+            last_success_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            last_success_source=source,
+            last_error=None,
+            consecutive_failures=0,
+            last_cycle_jobs=count,
+        )
 
     async def fetch_job_detail(self, url: str) -> JobDetail:
         host = _host(url)

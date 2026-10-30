@@ -181,6 +181,8 @@ def main_menu_keyboard(active: bool) -> InlineKeyboardMarkup:
          InlineKeyboardButton(
              "💬 Contact owner", callback_data="menu:contact", style=GREEN
          )],
+        [InlineKeyboardButton("💡 Why SERENA?", callback_data="menu:why",
+                              style=GREEN)],
     ])
 
 

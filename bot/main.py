@@ -34,10 +34,9 @@ IST = ZoneInfo("Asia/Kolkata")
 # Runtime objects shared between the health endpoint and the bot itself.
 _RUNTIME: dict = {}
 
-# The hosting platform probes ONE port. We bind the configured PORT plus the
-# usual fallbacks, so the service is reachable no matter which port the
-# platform picked.
-FALLBACK_PORTS: tuple[int, ...] = (8000, 8080, 3000)
+# The hosting platform probes ONE port and (Voroa) aborts the deploy when
+# the service listens on more than one. So we bind exactly the port the
+# platform provides - no extra fallbacks.
 
 
 def _health_status() -> dict:
@@ -171,6 +170,7 @@ async def _post_init(app: Application) -> None:
         BotCommand("saved", "Your bookmarked jobs & reminders"),
         BotCommand("pause", "Pause job alerts"),
         BotCommand("resume", "Resume job alerts"),
+        BotCommand("why", "Why SERENA is useful for you"),
         BotCommand("contact", "Contact the owner - bugs & suggestions"),
         BotCommand("help", "Help & usage"),
         BotCommand("about", "About this bot & owners"),
@@ -197,21 +197,25 @@ async def _post_shutdown(app: Application) -> None:
 
 
 def _start_health_servers() -> None:
-    """Start the /health endpoint on the configured port + common fallbacks."""
+    """Start /health on EXACTLY the port the platform provides.
+
+    Voroa aborts the deployment when the service listens on more than one
+    port ("your service is listening on more than one port"), so the bot
+    must never open a second socket. When the web dashboard is enabled it
+    takes over that port and answers /health itself.
+    """
     if not config.ENABLE_HEALTH_SERVER:
         return
-    ports: list[int] = [config.PORT]
-    ports.extend(p for p in FALLBACK_PORTS if p != config.PORT)
-    for port in ports:
-        if config.ENABLE_WEB_APP and port == config.WEB_APP_PORT:
-            # The dashboard owns this port and answers /health itself.
-            continue
-        try:
-            server = start_health_server(port, status_provider=_health_status)
-        except OSError:
-            logger.warning("Port %s is not available - skipping", port)
-            continue
-        _RUNTIME.setdefault("health_servers", []).append(server)
+    port = config.PORT
+    if config.ENABLE_WEB_APP and port == config.WEB_APP_PORT:
+        # The dashboard owns this port and answers /health itself.
+        return
+    try:
+        server = start_health_server(port, status_provider=_health_status)
+    except OSError:
+        logger.warning("Port %s is not available - skipping", port)
+        return
+    _RUNTIME.setdefault("health_servers", []).append(server)
 
 
 async def _notify_owners(owner_ids, text: str) -> None:

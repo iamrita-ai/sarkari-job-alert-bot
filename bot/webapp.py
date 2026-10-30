@@ -296,6 +296,13 @@ def start_web_app(application) -> None:  # noqa: ANN001
             return
 
     port = config.WEB_APP_PORT or config.PORT
+    if port != config.PORT:
+        logger.warning(
+            "WEB_APP_PORT=%s differs from PORT=%s - the hosting platform only "
+            "forwards PORT, and a service that listens on two ports is "
+            "rejected by Voroa. Leave WEB_APP_PORT empty.",
+            port, config.PORT,
+        )
     config_ = uvicorn.Config(api, host="0.0.0.0", port=port,
                              log_level="warning")
     server = _Server(config_)

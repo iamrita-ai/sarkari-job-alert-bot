@@ -54,6 +54,14 @@ PERSISTENCE_PATH: str = os.getenv(
 # -1001234567890). Leave empty to disable.
 BROADCAST_CHANNEL_ID: str = os.getenv("BROADCAST_CHANNEL_ID", "").strip()
 
+# --- Optional stickers (the "premium" greeting) --------------------------
+# Either a single sticker file id ...
+WELCOME_STICKER_FILE_ID: str = os.getenv("WELCOME_STICKER_FILE_ID", "").strip()
+# ... or the name of a sticker set the bot owns - a random sticker of that
+# set is sent with the welcome message.
+#   python scripts/create_sticker_set.py <your_user_id>
+STICKER_SET_NAME: str = os.getenv("STICKER_SET_NAME", "").strip()
+
 # --- Optional AI summary (Groq) -----------------------------------------
 # Free tier: https://console.groq.com - turns the long eligibility text into
 # three plain lines (and optionally Hindi). Without a key the bot simply
@@ -108,6 +116,16 @@ ORIGINAL_BASE_URL: str = os.getenv(
     "ORIGINAL_BASE_URL", "https://www.sarkariresult.com"
 ).rstrip("/")
 ORIGINAL_LISTING_PATH: str = os.getenv("ORIGINAL_LISTING_PATH", "/latestjob/")
+
+# How many jobs are taken from ONE source (the listing is newest first).
+# Without this cap a fallback source that serves the whole archive would
+# catalogue thousands of ancient notices.
+MAX_LISTING_JOBS: int = int(os.getenv("MAX_LISTING_JOBS", "120"))
+
+# Every N-th cycle (and every cycle after a failure) the bot reads ALL
+# reachable sources and merges them, so a notice that only one source has is
+# never missed. 1 = every cycle.
+SWEEP_EVERY_CYCLES: int = int(os.getenv("SWEEP_EVERY_CYCLES", "6"))
 
 # Comma-separated source chain, tried in order until one returns jobs.
 #   mirror          -> sarkariresult.com.cm (direct HTML, works on cloud hosts)
