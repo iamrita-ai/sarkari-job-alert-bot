@@ -19,8 +19,13 @@ def start_health_server(
     port: int, status_provider: Callable[[], dict] | None = None
 ) -> ThreadingHTTPServer:
     class _HealthHandler(BaseHTTPRequestHandler):
+        # Every hosting platform probes a path of its own: Render and Voroa
+        # use "/", others use "/health" or "/healthz". Answer all of them
+        # with HTTP 200 - a 404 on "/" is read as "the service is not up".
+        HEALTH_PATHS = ("/", "/health", "/healthz", "/status", "/api/health")
+
         def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
-            if self.path.split("?")[0] == "/health":
+            if self.path.split("?")[0] in self.HEALTH_PATHS:
                 payload: dict = {"status": "ok", "service": "sarkari-job-alert-bot"}
                 if status_provider is not None:
                     try:

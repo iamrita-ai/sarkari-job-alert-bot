@@ -267,6 +267,24 @@ sarkari-job-alert-bot/
 
 ### 📦 Release notes
 
+- **v1.6.2** — *Voroa deploy fix*:
+  - the service now opens **exactly one** socket — the port the platform
+    injects as `$PORT` (Voroa, Render, Railway all do this). An earlier
+    version listened on `PORT` **plus** 8000/8080/3000, which made Voroa
+    abort with *"your service is listening on more than one port"*
+  - the optional dashboard no longer steals the port from the health
+    server: the **dashboard starts before the Telegram connection**, and if
+    fastapi/uvicorn are missing from the image the **health server takes the
+    port** instead — the service is never left without an open port (which
+    Voroa reports as *"we did not see your service listening on any port"*)
+  - the health endpoint answers **200** on `/`, `/health`, `/healthz` and
+    `/status` — Render and Voroa probe `/`, and a 404 there reads as
+    "the service is down"
+  - the platform port is also detected from any `*PORT*` environment
+    variable, so a platform that names it differently still works
+  - the Docker image now installs the web requirements by default
+    (`INSTALL_WEB=true`), so `ENABLE_WEB_APP=true` works out of the box
+
 - **v1.6.1** — *deploy fix + premium polish*:
   - **Voroa deploy fix**: the bot listened on `PORT` **and** 8000/8080/3000,
     so Voroa aborted the deployment (*"your service is listening on more than
@@ -467,7 +485,7 @@ docker run -d --name sarkari-bot \
 | `MONGODB_URI` | — | Atlas/self-hosted Mongo connection string when backend=mongodb |
 | `MONGODB_DATABASE` | `sarkari_job_bot` | Mongo database name |
 | `ENABLE_HEALTH_SERVER` | `true` | Serve `/health` on `PORT` |
-| `PORT` | `8080` | Health-server port (Render sets this automatically) |
+| `PORT` | `8080` | The platform port — the service listens on **only** this one |
 | `MIRROR_BASE_URL` | `https://sarkariresult.com.cm` | Primary CloudFront-free mirror |
 | `MIRROR_LISTING_PATH` | `/latest-jobs/` | Mirror listing page |
 | `ORIGINAL_BASE_URL` | `https://www.sarkariresult.com` | Original site (backup) |

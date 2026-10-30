@@ -146,20 +146,6 @@ async def _post_init(app: Application) -> None:
     except Exception:  # noqa: BLE001 - a scheduling error must not kill the bot
         logger.exception("Could not schedule the daily digest")
 
-    # Optional web dashboard (FastAPI) - needs requirements-web.txt
-    if config.ENABLE_WEB_APP:
-        try:
-            from bot.webapp import start_web_app
-
-            start_web_app(app)
-        except ImportError:
-            logger.warning(
-                "ENABLE_WEB_APP is on but fastapi/uvicorn are missing - "
-                "run: pip install -r requirements-web.txt"
-            )
-        except Exception:  # noqa: BLE001 - the dashboard must never kill the bot
-            logger.exception("Could not start the web dashboard")
-
     await app.bot.set_my_commands([
         BotCommand("start", "Create / view your job profile"),
         BotCommand("profile", "Show your saved preferences"),
@@ -196,6 +182,55 @@ async def _post_shutdown(app: Application) -> None:
     logger.info("Shutdown complete")
 
 
+def _start_web_app(app: Application) -> bool:
+    """Start the optional dashboard (it takes the platform port).
+
+    Returns True when the dashboard is up and serving. When it cannot start
+    the caller falls back to the tiny health server - the platform must
+    always see an open port.
+    """
+    if not config.ENABLE_WEB_APP:
+        return False
+    try:
+        from bot.webapp import start_web_app
+
+        start_web_app(app)
+    except ImportError:
+        logger.warning(
+            "ENABLE_WEB_APP is on but fastapi/uvicorn are missing - "
+            "run: pip install -r requirements-web.txt"
+        )
+        return False
+    except Exception:  # noqa: BLE001 - the dashboard must never kill the bot
+        logger.exception("Could not start the web dashboard")
+        return False
+    return True
+
+
+def _web_app_ready() -> bool:
+    """True when the optional dashboard can really start.
+
+    The dashboard owns the platform port (it answers /health itself), so the
+    health server may only step aside when the dashboard will actually come
+    up. If fastapi/uvicorn are missing from the image, the health server
+    has to take the port - otherwise the platform sees NO open port and
+    aborts the deployment.
+    """
+    if not config.ENABLE_WEB_APP:
+        return False
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+    except ImportError:
+        logger.warning(
+            "ENABLE_WEB_APP is on but fastapi/uvicorn are missing - the "
+            "health server takes the platform port instead. Build the image "
+            "with INSTALL_WEB=true (or pip install -r requirements-web.txt)."
+        )
+        return False
+    return True
+
+
 def _start_health_servers() -> None:
     """Start /health on EXACTLY the port the platform provides.
 
@@ -206,8 +241,10 @@ def _start_health_servers() -> None:
     """
     if not config.ENABLE_HEALTH_SERVER:
         return
+    if _RUNTIME.get("health_servers"):
+        return  # already running - never open a second socket
     port = config.PORT
-    if config.ENABLE_WEB_APP and port == config.WEB_APP_PORT:
+    if _web_app_ready() and port == config.WEB_APP_PORT:
         # The dashboard owns this port and answers /health itself.
         return
     try:
@@ -312,9 +349,13 @@ def main() -> None:
         except Exception:  # noqa: BLE001 - never block the bot on this
             logger.exception("Could not enable conversation persistence")
 
-    # The health endpoint comes up BEFORE the Telegram connection, so the
-    # platform always sees a listening service (even if Telegram is slow).
-    _start_health_servers()
+    # The HTTP port must be open BEFORE the Telegram connection: a platform
+    # like Voroa aborts the deployment when it sees no listening port, and
+    # the Telegram connection can fail (bad token, network). The dashboard
+    # takes the port when it is enabled and available, otherwise the tiny
+    # health server does - never both, a second socket aborts the deploy.
+    if not _start_web_app(app):
+        _start_health_servers()
 
     register_handlers(app)
     register_reminders(app)

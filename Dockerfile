@@ -15,7 +15,10 @@ WORKDIR /app
 COPY requirements.txt requirements-web.txt ./
 
 # Set INSTALL_WEB=true to ship the optional web dashboard (FastAPI) too.
-ARG INSTALL_WEB=false
+# The optional web dashboard (fastapi + uvicorn). ON by default so that
+# ENABLE_WEB_APP=true works out of the box - the dashboard then shares the
+# single platform port with the health endpoint.
+ARG INSTALL_WEB=true
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir \
        --retries 5 --timeout 120 --prefer-binary \

@@ -74,8 +74,27 @@ AI_SUMMARY_LANGUAGE: str = os.getenv("AI_SUMMARY_LANGUAGE", "en").strip().lower(
 CARD_LANGUAGE: str = os.getenv("CARD_LANGUAGE", "both").strip().lower()
 
 # --- Hosting port (Render / getvoroa / Voroa) ---------------------------
-# The platform probes this port - it is the only port the public URL reaches.
-PORT: int = int(os.getenv("PORT", "8080"))
+def _platform_port() -> int:
+    """The port the hosting platform provides.
+
+    Render, Voroa, Railway and friends inject ``PORT``. A few platforms use
+    another name, so any ``*PORT*`` variable with a plausible port number is
+    accepted as a fallback. The service MUST listen on exactly this one
+    port - Voroa aborts a deploy that opens a second socket.
+    """
+    raw = os.getenv("PORT", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    for name, value in os.environ.items():
+        if "PORT" not in name.upper():
+            continue
+        value = value.strip()
+        if value.isdigit() and 1024 <= int(value) <= 65535:
+            return int(value)
+    return 8080
+
+
+PORT: int = _platform_port()
 
 # --- Web app (optional FastAPI dashboard) -------------------------------
 ENABLE_WEB_APP: bool = _get_bool("ENABLE_WEB_APP", False)

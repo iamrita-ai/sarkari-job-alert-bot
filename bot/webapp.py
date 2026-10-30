@@ -116,8 +116,15 @@ def create_app(application):  # noqa: ANN001
             "FastAPI is not installed - run: pip install -r requirements-web.txt"
         )
 
-    api = FastAPI(title="Sarkari Job Alert", docs_url=None, redoc_url=None)
-    db = application.bot_data["db"]
+    api = FastAPI(title="SERENA", docs_url=None, redoc_url=None)
+
+    def db():  # noqa: ANN202 - the database is opened a moment later
+        """The database, looked up lazily.
+
+        The dashboard starts BEFORE the Telegram connection, so the database
+        does not exist yet at this point - it is created right after.
+        """
+        return application.bot_data["db"]
 
     async def current_user(request: Request) -> int | None:
         return verify_token(request.query_params.get("t", ""), config.WEB_APP_SECRET)
@@ -130,15 +137,15 @@ def create_app(application):  # noqa: ANN001
                 <div class='card'><h1>Sarkari Job Alert</h1>
                 <p class='muted'>Open the personal link the bot sent you
                 (/webapp) to see your profile and the latest vacancies.</p></div>""")
-        profile = await db.get_user(user_id)
+        profile = await db().get_user(user_id)
         token = request.query_params.get("t", "")
         query = (request.query_params.get("q") or "").strip()
         state = (request.query_params.get("state") or "").strip()
-        jobs = await db.search_jobs(query, limit=60)
+        jobs = await db().search_jobs(query, limit=60)
         if state:
             filtered = []
             for job in jobs:
-                detail = await db.get_job_detail(job.job_id)
+                detail = await db().get_job_detail(job.job_id)
                 if detail and state in (detail.states or []):
                     filtered.append(job)
             jobs = filtered
@@ -194,7 +201,7 @@ def create_app(application):  # noqa: ANN001
             return _page("Profile", "<div class='card'>Open the link from the bot."
                                          "</div>")
         token = request.query_params.get("t", "")
-        profile = await db.get_user(user_id)
+        profile = await db().get_user(user_id)
         if profile is None:
             return _page("Profile", "<div class='card'>No profile yet - send "
                                      "/start in the bot.</div>")
@@ -237,7 +244,7 @@ def create_app(application):  # noqa: ANN001
         user_id = verify_token(t, config.WEB_APP_SECRET)
         if user_id is None:
             return _page("Profile", "<div class='card'>Invalid link.</div>")
-        profile = await db.get_user(user_id)
+        profile = await db().get_user(user_id)
         if profile is None:
             return _page("Profile", "<div class='card'>No profile yet.</div>")
         best_rank, best_key = -1, profile.qualification
@@ -248,7 +255,7 @@ def create_app(application):  # noqa: ANN001
             rank = QUAL_MAP[degree["qual_key"]]["rank"]
             if rank > best_rank:
                 best_rank, best_key = rank, degree["qual_key"]
-        await db.update_user(
+        await db().update_user(
             user_id,
             full_name=full_name.strip()[:64] or profile.full_name,
             dob=dob.strip() or profile.dob,
@@ -268,7 +275,7 @@ def create_app(application):  # noqa: ANN001
             return _page("Saved", "<div class='card'>Open the link from the bot."
                                   "</div>")
         token = request.query_params.get("t", "")
-        items = await db.list_saved(user_id)
+        items = await db().list_saved(user_id)
         rows = [
             f"<div class='card'><a href='{item.url}' target='_blank'>"
             f"{_html(item.title)}</a>"
