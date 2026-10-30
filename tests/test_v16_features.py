@@ -412,6 +412,9 @@ def test_web_app_uses_the_platform_port():
 
 
 def test_web_app_serves_health(tmp_path):
+    """The dashboard needs the optional web requirements (CI installs only
+    the core ones), so the test is skipped when they are missing."""
+    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from bot.webapp import create_app
