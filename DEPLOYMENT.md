@@ -304,6 +304,50 @@ RUN pip install --no-cache-dir motor
 
 ---
 
+## v1.6.2 — the service must listen on ONE port
+
+Voroa checks the container and aborts the deployment when it finds more than
+one listening socket, or when it finds none:
+
+> Deploy aborted — your service is listening on more than one port (8000,
+> 8080), so Voroa cannot tell which one serves your traffic.
+>
+> Deploy aborted — we did not see your service listening on any port while we
+> waited (180s).
+
+Since v1.6.2 the bot opens **exactly one** socket: `PORT` — the port the
+platform injects into the container (Voroa, Render and Railway all set it
+automatically; the bot also accepts any other `*PORT*` variable as a
+fallback). The optional web dashboard shares that port and answers `/health`
+itself, so the platform health check keeps working.
+
+**Do not set `WEB_APP_PORT`** — leave it empty.
+
+### What the bot answers
+
+| Path | Answer | Used by |
+|---|---|---|
+| `/` | 200 + JSON | Render / Voroa probe the root path |
+| `/health` | 200 + JSON (with the live scraper status) | your own monitoring |
+| `/healthz`, `/status` | 200 + JSON | other platforms |
+
+If the dashboard is switched on (`ENABLE_WEB_APP=true`) it serves the same
+paths — the FastAPI app takes over the platform port and the small health
+server steps aside. If fastapi/uvicorn are missing from the image, the
+health server takes the port instead, so the service is **never** left
+without an open socket.
+
+### Checklist before you press *Deploy*
+
+1. `BOT_TOKEN` is set and valid — an invalid token makes the bot exit and
+   the platform aborts the deploy.
+2. `PORT` is **not** hard-coded — let the platform set it.
+3. `WEB_APP_PORT` is **empty**.
+4. Only **one** deployment runs this token (a second instance makes Telegram
+   cancel the first one with `409 Conflict`).
+5. The build installs the web requirements (`INSTALL_WEB=true` is the default
+   of the Dockerfile ✓).
+
 ## Optional v1.5 extras
 
 | Variable | Default | What it does |
