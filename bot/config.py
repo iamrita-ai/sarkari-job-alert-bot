@@ -22,6 +22,8 @@ def _get_bool(name: str, default: bool) -> bool:
 
 
 # --- Telegram -------------------------------------------------------------
+# The product name shown in the bot (brand: SERENA / Technical Serena)
+BRAND_NAME: str = os.getenv("BRAND_NAME", "SERENA").strip()
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 OWNER_USERNAMES: set[str] = {
     u.strip().lstrip("@").lower()
@@ -63,9 +65,16 @@ AI_SUMMARY_LANGUAGE: str = os.getenv("AI_SUMMARY_LANGUAGE", "en").strip().lower(
 # Card language: "en", "hi" or "both" (Hindi block under the English card)
 CARD_LANGUAGE: str = os.getenv("CARD_LANGUAGE", "both").strip().lower()
 
+# --- Hosting port (Render / getvoroa / Voroa) ---------------------------
+# The platform probes this port - it is the only port the public URL reaches.
+PORT: int = int(os.getenv("PORT", "8080"))
+
 # --- Web app (optional FastAPI dashboard) -------------------------------
 ENABLE_WEB_APP: bool = _get_bool("ENABLE_WEB_APP", False)
-WEB_APP_PORT: int = int(os.getenv("WEB_APP_PORT", "8081"))
+# The dashboard listens on WEB_APP_PORT when it is set explicitly. Otherwise
+# it listens on the platform port (PORT), because that is the only port the
+# public URL (PUBLIC_BASE_URL) reaches.
+WEB_APP_PORT: int = int(os.getenv("WEB_APP_PORT", "") or PORT)
 # Secret used to sign per-user links (/webapp). Generate with:
 #   python -c "import secrets; print(secrets.token_urlsafe(32))"
 WEB_APP_SECRET: str = os.getenv("WEB_APP_SECRET", "").strip()
@@ -85,7 +94,6 @@ WATCH_WINDOW_DAYS: int = int(os.getenv("WATCH_WINDOW_DAYS", "21"))
 
 # --- Health-check server (Render / getvoroa / Voroa) ----------------------
 ENABLE_HEALTH_SERVER: bool = _get_bool("ENABLE_HEALTH_SERVER", True)
-PORT: int = int(os.getenv("PORT", "8080"))
 
 # --------------------------------------------------------------- data sources
 # The original www.sarkariresult.com sits behind CloudFront and blocks most
@@ -105,9 +113,15 @@ ORIGINAL_LISTING_PATH: str = os.getenv("ORIGINAL_LISTING_PATH", "/latestjob/")
 #   mirror          -> sarkariresult.com.cm (direct HTML, works on cloud hosts)
 #   original        -> www.sarkariresult.com direct (works on residential IPs)
 #   original-jina   -> www.sarkariresult.com via r.jina.ai reader (last resort)
+# Section pages of the mirror (used by /admit and /result)
+MIRROR_ADMIT_CARD_PATH: str = os.getenv("MIRROR_ADMIT_CARD_PATH", "/admit-card/")
+MIRROR_RESULT_PATH: str = os.getenv("MIRROR_RESULT_PATH", "/result/")
+
 SOURCE_ORDER: list[str] = [
     s.strip()
-    for s in os.getenv("SOURCE_ORDER", "mirror,original,original-jina").split(",")
+    for s in os.getenv(
+        "SOURCE_ORDER", "mirror,mirror-jina,original,original-jina"
+    ).split(",")
     if s.strip()
 ]
 
@@ -129,6 +143,8 @@ USER_AGENT: str = os.getenv(
 
 # Bot credits shown on cards and the about page
 OWNER_HANDLES: str = "@TechnicalSerena & @Xioqui_xin"
+# The owner handle users are pointed to (contact form, direct chat link)
+OWNER_PRIMARY: str = os.getenv("OWNER_PRIMARY", "TechnicalSerena")
 
 # Bundled visual assets
 START_BANNER_PATH: str = str(BASE_DIR / "assets" / "start_banner.jpg")

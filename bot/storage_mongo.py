@@ -16,6 +16,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
+from bot.utils import decode_job_id, job_ref
 from bot.models import JobDetail, JobSummary, SavedJob, UserProfile
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,20 @@ class MongoDatabase:
         self._db = self._client[self.database_name]
         await self._db["jobs"].create_index("detail_fetched")
         await self._db["jobs"].create_index("first_seen")
+        await self._db["jobs"].create_index("job_ref")
         await self._db["saved_jobs"].create_index(
             [("reminded", 1), ("reminder_date", 1)]
         )
+        # Backfill the short job reference for documents stored before v1.6
+        # (the buttons carry the reference instead of the long slug).
+        backfilled = 0
+        async for doc in self._db["jobs"].find({"job_ref": {"$exists": False}}):
+            await self._db["jobs"].update_one(
+                {"_id": doc["_id"]}, {"$set": {"job_ref": job_ref(doc["_id"])}}
+            )
+            backfilled += 1
+        if backfilled:
+            logger.info("MongoDB migration: %d job references added", backfilled)
         logger.info("MongoDB ready: database '%s'", self.database_name)
 
     async def close(self) -> None:
@@ -164,6 +176,7 @@ class MongoDatabase:
                     "url": job.url, "title": job.title,
                     "last_date": job.last_date, "first_seen": now,
                     "detail_fetched": False, "detail": None,
+                    "job_ref": job_ref(job.job_id),
                 }},
                 upsert=True,
             )
@@ -199,6 +212,17 @@ class MongoDatabase:
     async def get_job(self, job_id: str) -> JobSummary | None:
         d = await self._db["jobs"].find_one({"_id": job_id})
         return JobSummary(d["_id"], d["title"], d["url"], d.get("last_date")) if d else None
+
+    async def get_job_by_ref(self, ref: str) -> JobSummary | None:
+        """Resolve a short job reference (or a legacy base64 job id)."""
+        doc = await self._db["jobs"].find_one({"job_ref": ref})
+        if doc is None:
+            legacy = decode_job_id(ref)
+            if legacy:
+                return await self.get_job(legacy)
+            return None
+        return JobSummary(doc["_id"], doc.get("title", ""), doc.get("url", ""),
+                          doc.get("last_date"))
 
     async def list_jobs(self, limit: int = 100) -> list[JobSummary]:
         cursor = self._db["jobs"].find({}).sort("first_seen", -1).limit(limit)

@@ -177,6 +177,16 @@ def create_app(application):  # noqa: ANN001
             )
         return _page("Sarkari Job Alert", "".join(body))
 
+    @api.get("/health")
+    async def health():
+        """The platform health check - the dashboard replaces the tiny
+        stdlib health server when it owns the port."""
+        return {
+            "status": "ok",
+            "service": "serena-bot",
+            "web_app": True,
+        }
+
     @api.get("/profile", response_class=HTMLResponse)
     async def profile_form(request: Request):
         user_id = await current_user(request)
@@ -285,10 +295,11 @@ def start_web_app(application) -> None:  # noqa: ANN001
         def install_signal_handlers(self) -> None:  # pragma: no cover
             return
 
-    config_ = uvicorn.Config(api, host="0.0.0.0", port=config.WEB_APP_PORT,
+    port = config.WEB_APP_PORT or config.PORT
+    config_ = uvicorn.Config(api, host="0.0.0.0", port=port,
                              log_level="warning")
     server = _Server(config_)
     thread = threading.Thread(target=server.run, daemon=True,
                               name="sarkari-webapp")
     thread.start()
-    logger.info("Web dashboard running on port %s", config.WEB_APP_PORT)
+    logger.info("Web dashboard running on port %s", port)

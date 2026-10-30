@@ -24,7 +24,7 @@ from bot.constants import (
     SECTOR_EMOJI,
     SECTORS,
 )
-from bot.utils import encode_job_id
+from bot.utils import job_ref
 
 BLUE = KeyboardButtonStyle.PRIMARY
 GREEN = KeyboardButtonStyle.SUCCESS
@@ -171,15 +171,43 @@ def main_menu_keyboard(active: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(
             "🔍 Search in Any Chat", switch_inline_query="", style=BLUE
         )],
+        [InlineKeyboardButton("🎫 Admit Cards", callback_data="menu:admit",
+                              style=BLUE),
+         InlineKeyboardButton("🏁 Results", callback_data="menu:result",
+                              style=BLUE)],
         [InlineKeyboardButton("🔖 Saved Jobs", callback_data="menu:saved", style=BLUE),
          InlineKeyboardButton("ℹ️ Help", callback_data="menu:help", style=BLUE)],
-        [InlineKeyboardButton("📢 About", callback_data="menu:about", style=BLUE)],
+        [InlineKeyboardButton("📢 About", callback_data="menu:about", style=BLUE),
+         InlineKeyboardButton(
+             "💬 Contact owner", callback_data="menu:contact", style=GREEN
+         )],
     ])
 
 
+# ----------------------------------------------------------- daily digest
+def digest_keyboard(matched, closing=None) -> InlineKeyboardMarkup:
+    """Buttons under the daily digest - tapping one opens the full job card."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for job in list(matched)[:8]:
+        encoded = job_ref(job.job_id)
+        label = job.title if len(job.title) <= 42 else job.title[:40] + "…"
+        rows.append([InlineKeyboardButton(
+            f"📋 {label}", callback_data=f"dig:{encoded}", style=BLUE,
+        )])
+    for item in list(closing or [])[:4]:
+        encoded = job_ref(item.job_id)
+        label = item.title if len(item.title) <= 42 else item.title[:40] + "…"
+        rows.append([InlineKeyboardButton(
+            f"⏰ {label}", callback_data=f"dig:{encoded}", style=GREEN,
+        )])
+    rows.append([InlineKeyboardButton(
+        "📂 Browse all jobs", callback_data="menu:latest", style=GREEN
+    )])
+    return InlineKeyboardMarkup(rows)
+
 # ----------------------------------------------------------- job cards
 def job_action_keyboard(job, saved: bool = False) -> InlineKeyboardMarkup:
-    encoded = encode_job_id(job.job_id)
+    encoded = job_ref(job.job_id)
     row_one: list[InlineKeyboardButton] = [
         InlineKeyboardButton("🌐 Full Details", url=job.url, style=BLUE)
     ]
@@ -195,7 +223,7 @@ def job_action_keyboard(job, saved: bool = False) -> InlineKeyboardMarkup:
 
 
 def job_detail_keyboard(job, detail, saved: bool = False) -> InlineKeyboardMarkup:
-    encoded = encode_job_id(job.job_id)
+    encoded = job_ref(job.job_id)
     row_one: list[InlineKeyboardButton] = []
     if detail and detail.apply_url:
         row_one.append(InlineKeyboardButton(
@@ -219,7 +247,7 @@ def job_detail_keyboard(job, detail, saved: bool = False) -> InlineKeyboardMarku
 
 
 def reminder_keyboard(job_id: str, has_last_date: bool) -> InlineKeyboardMarkup:
-    encoded = encode_job_id(job_id)
+    encoded = job_ref(job_id)
     rows = []
     if has_last_date:
         rows.append([

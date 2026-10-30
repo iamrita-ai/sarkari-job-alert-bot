@@ -319,9 +319,19 @@ RUN pip install --no-cache-dir motor
 | `AI_SUMMARY_LANGUAGE` | `en` | Language of the AI summary |
 | `BROADCAST_CHANNEL_ID` | *(empty)* | Mirror every new job into your channel (`@your_channel` or `-100…`) |
 | `ENABLE_WEB_APP` | `false` | Start the FastAPI dashboard (needs `pip install -r requirements-web.txt`) |
-| `WEB_APP_PORT` | `8081` | Port of the dashboard |
+| `WEB_APP_PORT` | `PORT` | Port of the dashboard — leave it **empty** so it uses the platform port |
 | `WEB_APP_SECRET` | *(empty)* | Secret that signs the personal `/webapp` links — generate with `python -c "import secrets;print(secrets.token_urlsafe(32))"` |
 | `PUBLIC_BASE_URL` | *(empty)* | Public address of your deployment, used to build dashboard links |
+
+### New in v1.6
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BRAND_NAME` | `SERENA` | Product name on every card, the welcome message and the dashboard |
+| `OWNER_PRIMARY` | `TechnicalSerena` | Owner handle used by `/contact` and the *Contact owner* button |
+| `MIRROR_ADMIT_CARD_PATH` | `/admit-card/` | Mirror page listed by `/admit` |
+| `MIRROR_RESULT_PATH` | `/result/` | Mirror page listed by `/result` |
+| `SOURCE_ORDER` | `mirror,mirror-jina,original,original-jina` | Failover chain — one blocked host can never stop the bot |
 
 ### Groq AI summary (optional)
 
@@ -347,15 +357,56 @@ BROADCAST_CHANNEL_ID=@your_channel      # or -1001234567890
 
 3. Test it with `/channel` (owner only).
 
-### Web dashboard
+### Web dashboard (v1.6 — works on the platform port)
+
+The dashboard runs **inside the bot process** (FastAPI + uvicorn) and is
+served from the same public address as the bot. It replaces the tiny health
+server on that port and answers `/health` itself, so the platform check still
+passes.
+
+**What to put in Env (Render / Voroa / Docker):**
+
+| Variable | Value | Why |
+|---|---|---|
+| `ENABLE_WEB_APP` | `true` | switches the dashboard on |
+| `WEB_APP_SECRET` | a long random string | signs the personal dashboard links |
+| `PUBLIC_BASE_URL` | `https://<your-service>.onrender.com` | the address the *Open Dashboard* button points to |
+| `WEB_APP_PORT` | leave **empty** | the dashboard then listens on `PORT` — the only port the platform exposes |
 
 ```bash
+# local
 pip install -r requirements-web.txt
 ENABLE_WEB_APP=true
 WEB_APP_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
 PUBLIC_BASE_URL=https://your-public-domain
+python -m bot
 ```
 
-Every user gets a signed personal link with `/webapp`. The dashboard shows
-the latest vacancies (with search + state filter), their saved jobs and a
-form to edit name, DOB, category, degrees, documents and sectors.
+**How a user reaches it:** `/webapp` → the bot answers with an *🚀 Open
+Dashboard* button that carries a signed, user-specific link
+(`HMAC(user_id, WEB_APP_SECRET)`). The dashboard shows the latest vacancies
+(with search + state filter), their saved jobs and a form to edit name, DOB,
+category, degrees, documents and sectors.
+
+> ⚠️ `WEB_APP_PORT=8081` (the old default) made the dashboard unreachable on
+> Render/Voroa — the platform only forwards `PORT`. Leave the variable empty.
+
+### Bot profile picture & banner (v1.6)
+
+Telegram does **not** let a bot set its own avatar: open **@BotFather** →
+`/setuserpic` → pick the bot → upload `assets/serena_avatar.jpg` from this
+repository (or your own image). The welcome banner (`assets/start_banner.jpg`)
+is shipped with the code and is sent automatically on `/start`.
+
+### Owner contact (v1.6)
+
+Users report bugs and suggestions with `/contact` (or the *Contact owner*
+button). The message is forwarded to every owner chat that has written to the
+bot at least once, together with the sender's chat id. Answer with:
+
+```
+/reply 123456789 Your message to the user
+```
+
+(`/reply` is owner-only. The owner chat ids are collected automatically when
+an owner writes to the bot.)

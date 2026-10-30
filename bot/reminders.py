@@ -20,7 +20,7 @@ from telegram.ext import (
 from bot import cards, keyboards
 from bot.constants import PAGE_SIZE, S_REMINDER_DATE
 from bot.models import JobSummary
-from bot.utils import decode_job_id, md_escape, parse_dob, parse_slash_date
+from bot.utils import md_escape, parse_dob, parse_slash_date, resolve_job
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -112,15 +112,13 @@ def _guest():
 # ------------------------------------------------------------- save buttons
 async def save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    job_id = decode_job_id(query.data.split(":", 1)[1])
-    if not job_id:
-        await query.answer("Invalid button.", show_alert=True)
-        return
+    ref = query.data.split(":", 1)[1]
     db = context.application.bot_data["db"]
-    job = await db.get_job(job_id)
+    job = await resolve_job(context.application, ref)
     if job is None:
         await query.answer("Job no longer exists.", show_alert=True)
         return
+    job_id = job.job_id
     is_new = await db.save_job(query.from_user.id, job)
     await query.answer("Saved to /saved ✓" if is_new else "Already in your saved jobs")
     # Refresh the keyboard so the button reflects the new state
@@ -136,15 +134,13 @@ async def save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ------------------------------------------------------------- reminder flow
 async def rem_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    job_id = decode_job_id(query.data.split(":", 1)[1])
-    if not job_id:
-        await query.answer("Invalid button.", show_alert=True)
-        return
+    ref = query.data.split(":", 1)[1]
     db = context.application.bot_data["db"]
-    job = await db.get_job(job_id)
+    job = await resolve_job(context.application, ref)
     if job is None:
         await query.answer("Job no longer exists.", show_alert=True)
         return
+    job_id = job.job_id
     await db.save_job(query.from_user.id, job)
     await query.answer()
     await query.message.reply_markdown_v2(
@@ -156,16 +152,13 @@ async def rem_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def rem_quick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    _, encoded, option = query.data.split(":")
-    job_id = decode_job_id(encoded)
-    if not job_id:
-        await query.answer("Invalid button.", show_alert=True)
-        return
+    _, ref, option = query.data.split(":")
     db = context.application.bot_data["db"]
-    job = await db.get_job(job_id)
+    job = await resolve_job(context.application, ref)
     if job is None:
         await query.answer("Job no longer exists.", show_alert=True)
         return
+    job_id = job.job_id
     last_date = parse_slash_date(job.last_date)
     if last_date is None:
         await query.answer("No official last date — use Custom Date.", show_alert=True)
@@ -200,10 +193,11 @@ async def rem_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def rem_custom_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    job_id = decode_job_id(query.data.split(":", 1)[1])
-    if not job_id:
+    job = await resolve_job(context.application, query.data.split(":", 1)[1])
+    if job is None:
         await query.answer("Invalid button.", show_alert=True)
         return ConversationHandler.END
+    job_id = job.job_id
     context.user_data["reminder_job_id"] = job_id
     await query.answer()
     await query.message.reply_markdown_v2(

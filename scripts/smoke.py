@@ -166,7 +166,8 @@ async def run_checks(db) -> int:
         apply_last_date="25 November 2026",
         important_dates="Apply Online Last Date : 25/11/2026",
     ))
-    up = FakeUpdate(callback=f"full:{__import__('bot.utils', fromlist=['x']).encode_job_id(jobs[0].job_id)}")
+    from bot.utils import job_ref
+    up = FakeUpdate(callback=f"full:{job_ref(jobs[0].job_id)}")
     await handlers.full_text_callback(up, ctx)
     assert up.callback_query.message.sent, "full text button produced nothing"
     assert "Bachelor Degree" in up.callback_query.message.sent[-1][1]

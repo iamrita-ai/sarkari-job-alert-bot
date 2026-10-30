@@ -47,6 +47,7 @@ from bot.constants import (
 )
 from bot.keyboards import (
     BLUE,
+    GREEN,
     admin_profile_keyboard,
     admin_users_keyboard,
     category_keyboard,
@@ -59,7 +60,7 @@ from bot.keyboards import (
     sectors_keyboard,
 )
 from bot.scraper import ScraperError
-from bot.utils import decode_job_id, md_escape, parse_dob
+from bot.utils import decode_job_id, md_escape, parse_dob, remember_jobs, resolve_job
 from bot.webapp import sign_token
 
 logger = logging.getLogger(__name__)
@@ -138,13 +139,12 @@ async def _show_deep_linked_job(update: Update, context: ContextTypes.DEFAULT_TY
                                 payload: str) -> bool:
     if not payload.startswith("j"):
         return False
-    job_id = decode_job_id(payload[1:])
-    if not job_id:
-        return False
+    ref = payload[1:]
     db = _db(context)
-    job = await db.get_job(job_id)
+    job = await resolve_job(context.application, ref)
     if job is None:
         return False
+    job_id = job.job_id
     profile = await db.get_user(update.effective_user.id)
     detail = await db.get_job_detail(job_id)
     age_info = None
@@ -642,6 +642,7 @@ async def latest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "⚠️ Couldn't reach the job sources right now. Please try again in a few minutes."
         )
         return
+    remember_jobs(context.application, jobs)
     matched = [job for job in jobs if matcher.title_matches(profile, job)]
     heading = "Latest Matching Jobs"
     if state_filter:
@@ -721,6 +722,12 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.message.reply_markdown_v2(
             "▶️ Alerts resumed\\." if active else "⏸ Alerts paused\\."
         )
+    elif action == "admit":
+        await admit_cards(update, context)
+    elif action == "result":
+        await results(update, context)
+    elif action == "contact":
+        await _contact_prompt(query.message)
     elif action == "saved":
         from bot.reminders import saved_command
         await saved_command(update, context)
@@ -734,6 +741,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except ScraperError:
             await status.edit_text("⚠️ Couldn't reach the job sources. Try again shortly.")
             return
+        remember_jobs(context.application, jobs)
         matched = [job for job in jobs if matcher.title_matches(profile, job)]
         await status.edit_text(f"✅ {len(matched)} matching jobs — use Next / Previous.")
         await open_browser(
@@ -745,15 +753,13 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def full_text_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """'Full Notification Text' - sends the complete notice in safe chunks."""
     query = update.callback_query
-    job_id = decode_job_id(query.data.split(":", 1)[1])
-    if not job_id:
-        await query.answer("Invalid button.", show_alert=True)
-        return
+    ref = query.data.split(":", 1)[1]
     db = _db(context)
-    job = await db.get_job(job_id)
+    job = await resolve_job(context.application, ref)
     if job is None:
         await query.answer("Job no longer exists.", show_alert=True)
         return
+    job_id = job.job_id
     detail = await db.get_job_detail(job_id)
     await query.answer()
     text = full_detail_text(job, detail)
@@ -836,13 +842,13 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     secret = config.WEB_APP_SECRET
     if not secret:
         await update.message.reply_text(
-            "🌐 The web dashboard is not enabled on this deployment\\."
+            "🌐 The web dashboard is not enabled on this deployment."
         )
         return
     base = config.PUBLIC_BASE_URL.rstrip("/")
     if not base:
         await update.message.reply_text(
-            "🌐 Set `PUBLIC_BASE_URL` (your public domain) to use the dashboard\\."
+            "🌐 Set PUBLIC_BASE_URL (your public domain) to use the dashboard."
         )
         return
     token = sign_token(update.effective_user.id, secret)
@@ -863,6 +869,167 @@ async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return  # a conversation handler owns this input
     await update.message.reply_text(
         "Use /start to set up your profile or /help to see everything I can do."
+    )
+
+
+# ------------------------------------------------------------- admit cards
+async def _section_browser(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                           path: str, heading: str, kind: str) -> None:
+    """Show a section of the source site (admit cards, results, ...)."""
+    status = await update.effective_message.reply_text("🔎 Fetching\u2026")
+    try:
+        jobs = await _scraper(context).fetch_section(path)
+    except ScraperError:
+        logger.exception("Section fetch failed: %s", path)
+        try:
+            await status.edit_text(
+                "⚠️ Couldn't reach the job sources right now. "
+                "Please try again in a few minutes."
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    await status.edit_text(f"✅ {len(jobs)} notices \u2014 tap a title for the full card.")
+    await open_browser(
+        update, context, update.effective_user.id, jobs[:60],
+        kind=kind, heading=heading,
+    )
+
+
+async def admit_cards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Latest admit cards."""
+    await _section_browser(
+        update, context, config.MIRROR_ADMIT_CARD_PATH,
+        heading="🎫 Latest Admit Cards", kind="admit",
+    )
+
+
+async def results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Latest results."""
+    await _section_browser(
+        update, context, config.MIRROR_RESULT_PATH,
+        heading="🏁 Latest Results", kind="result",
+    )
+
+
+# ---------------------------------------------------------- owner contact
+async def _contact_prompt(message) -> None:
+    """The standard "reach the owner" message (button + instructions)."""
+    await message.reply_markdown_v2(
+        "💬 *Need help\\, found a bug or have a suggestion?*\n\n"
+        f"• Write to *Technical Serena* directly: @{config.OWNER_PRIMARY}\n"
+        "• Or send it here and it is forwarded automatically: "
+        "`/contact your message`\n\n"
+        "Bug reports are welcome \u2014 they make the bot better for everyone\\.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "💬 Open Telegram chat",
+                url=f"https://t.me/{config.OWNER_PRIMARY}",
+                style=GREEN,
+            ),
+        ]]),
+    )
+
+
+async def contact_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Let a user reach the bot owner (bugs, suggestions, help)."""
+    text = " ".join(context.args or []).strip()
+    owner_ids = context.application.bot_data.get("owner_chat_ids") or set()
+    if not text:
+        await _contact_prompt(update.effective_message)
+        return
+    if not owner_ids:
+        await update.effective_message.reply_text(
+            f"Please write directly to @{config.OWNER_PRIMARY} \u2014 the owner "
+            "account is not reachable for forwarding right now."
+        )
+        return
+    user = update.effective_user
+    header = (
+        "\U0001f4e9 *New message from a user*\\n\\n"
+        f"Name: {md_escape(user.full_name or '-')}\\n"
+        f"Username: @{md_escape(user.username or '-')}\\n"
+        f"Chat ID: `{user.id}`\\n\\n"
+    )
+    delivered = 0
+    for chat_id in owner_ids:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, text=header + md_escape(text),
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            delivered += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not forward the message to owner %s", chat_id)
+    if delivered:
+        await update.effective_message.reply_text(
+            "\u2705 Sent to the owner \u2014 @"
+            f"{config.OWNER_PRIMARY} will get back to you."
+        )
+    else:
+        await update.effective_message.reply_text(
+            "Could not reach the owner right now \u2014 please write to "
+            f"@{config.OWNER_PRIMARY}."
+        )
+
+
+async def owner_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner: /reply <chat_id> <message> - answers a user directly."""
+    if not _is_owner(update):
+        await update.effective_message.reply_text("Only the bot owner can use this.")
+        return
+    if not context.args or len(context.args) < 2:
+        await update.effective_message.reply_text(
+            "Usage: /reply <chat_id> your message"
+        )
+        return
+    try:
+        target = int(context.args[0])
+    except ValueError:
+        await update.effective_message.reply_text("The chat id must be a number.")
+        return
+    body = " ".join(context.args[1:]).strip()
+    try:
+        await context.bot.send_message(
+            chat_id=target,
+            text=f"💬 *SERENA support*\n\n{md_escape(body)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not deliver the reply to %s", target)
+        await update.effective_message.reply_text("Could not deliver that message.")
+        return
+    await update.effective_message.reply_text("✅ Message sent.")
+
+
+# ------------------------------------------------------- digest job card
+async def digest_job_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A job tapped in the daily digest - show the full card."""
+    query = update.callback_query
+    await query.answer()
+    ref = query.data.split(":", 1)[1]
+    db = _db(context)
+    job = await resolve_job(context.application, ref)
+    if job is None:
+        await query.message.reply_text("That job is no longer in the catalogue.")
+        return
+    job_id = job.job_id
+    profile = await db.get_user(query.from_user.id)
+    detail = await db.get_job_detail(job_id)
+    age_info = None
+    if profile and detail:
+        _, age_info = matcher.age_matches(profile, detail)
+    from bot.cards import job_card
+    from bot.keyboards import job_detail_keyboard
+    from bot.reminders import _guest
+    target = profile or _guest()
+    await query.message.reply_markdown_v2(
+        job_card(job, detail, target, age_info),
+        reply_markup=job_detail_keyboard(
+            job, detail,
+            await db.is_saved(target.user_id, job_id) if profile else False,
+        ),
+        disable_web_page_preview=True,
     )
 
 
@@ -969,7 +1136,7 @@ async def admin_channel_test(update: Update,
     except Exception as exc:  # noqa: BLE001
         await update.message.reply_text(f"❌ Could not post: {exc}")
         return
-    await update.message.reply_text(f"✅ Test message posted to {channel}\\.")
+    await update.message.reply_text(f"✅ Test message posted to {channel}.")
 
 
 async def admin_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1267,6 +1434,10 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about_command))
+    app.add_handler(CommandHandler("admit", admit_cards))
+    app.add_handler(CommandHandler("result", results))
+    app.add_handler(CommandHandler("contact", contact_owner))
+    app.add_handler(CommandHandler("reply", owner_reply))
 
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
@@ -1284,6 +1455,8 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(browser_callback, pattern="^br:"))
     app.add_handler(CallbackQueryHandler(full_text_callback, pattern="^full:"))
     app.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^adm:"))
+    # A job tapped in the daily digest -> the full job card
+    app.add_handler(CallbackQueryHandler(digest_job_callback, pattern="^dig:"))
     # A setup button that arrives without a live conversation (restart or a
     # duplicate instance) must never be ignored silently.
     app.add_handler(CallbackQueryHandler(orphaned_setup_callback,

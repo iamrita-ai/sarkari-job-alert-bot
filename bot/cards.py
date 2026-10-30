@@ -382,9 +382,9 @@ def admin_user_card(profile: UserProfile, saved_count: int = 0,
 def _job_href(job_id: str, external_url: str, deep_base: str | None) -> str:
     """Deep link back into the bot when possible, else the external page."""
     if deep_base:
-        from bot.utils import encode_job_id
+        from bot.utils import job_ref
 
-        return deep_base + encode_job_id(job_id)
+        return deep_base + job_ref(job_id)
     return external_url
 
 
@@ -432,51 +432,63 @@ def saved_list_card(saved: list, page: int, total_pages: int,
 
 def welcome_caption() -> str:
     return (
-        "🚀 *Welcome to Sarkari Job Alert Bot*\n"
+        f"🚀 *Welcome to {config.BRAND_NAME}*\n"
         f"{DIVIDER}\n"
-        "I watch Sarkari Result around the clock and message you the moment a "
-        "government job matches your profile\\.\n\n"
+        "I watch the government job portals around the clock and message you the "
+        "moment a job matches your profile\\.\n\n"
         "Tap the button below to create your profile in 6 quick steps "
         "\\(name, D\\.O\\.B, category, degrees, documents, job choices\\)\\."
     )
 
 
 def help_text() -> str:
+    """A short, friendly guide: what to tap and in which order."""
     return (
-        "ℹ️ *How to use this bot*\n"
+        f"ℹ️ *{config.BRAND_NAME} — how to use me*\n"
         f"{DIVIDER}\n"
-        "1\\. /start — create your profile: name, D\\.O\\.B, category, "
-        "degrees, documents and job sectors\n"
-        "2\\. The bot scans Sarkari Result automatically and sends a rich card "
-        "the moment a vacancy matches your qualification *and age*\n"
-        "3\\. Commands:\n"
-        "   • /profile — view saved preferences\n"
-        "   • /edit — update any part of your profile\n"
-        "   • /latest — browse matching jobs with Next / Previous\n"
-        "   • /saved — your bookmarked jobs & reminders\n"
-        "   • /pause — stop notifications temporarily\n"
-        "   • /resume — turn notifications back on\n"
-        "   • /help — this message\n"
-        "   • /about — bot info & owners\n"
-        "4\\. In any chat, type `@<bot_username> railway` to search jobs inline\n"
+        "*1\\. Build your profile* \\(one time, about a minute\\)\n"
+        "   • /start → name → D\\.O\\.B → category → degrees → documents → "
+        "job types\n"
+        "   • /edit — change any answer later\n"
+        "*2\\. Get matched alerts*\n"
+        "   I check the job portals around the clock \(every 30 minutes by "
+        "default\) and send the full card the moment a vacancy fits your age, "
+        "category, degrees and documents\\.\n"
+        "*3\\. Browse whenever you want*\n"
+        "   • /latest — jobs that match you \\(Next / Previous\\)\n"
+        "   • /latest bihar — one state only\n"
+        "   • /admit — latest admit cards\n"
+        "   • /result — latest results\n"
+        "   • type `@<bot_username> railway` in any chat to search inline\n"
+        "*4\\. Save and organise*\n"
+        "   • /saved — your bookmarked jobs and reminders\n"
+        "   • tap 🔖 on any card to save it, ⏰ to set a reminder\n"
+        "*5\\. Notifications*\n"
+        "   • /pause — stop alerts · /resume — start again\n"
+        "   • /profile — see your preferences\n"
+        "   • /digest — today\'s summary on demand\n"
+        "*6\\. Need a hand?*\n"
+        "   • /contact — report a bug, send a suggestion or offer to help\n"
+        "   • /about — bot info and owners\n"
         f"{DIVIDER}\n"
-        f"🤖 Managed by {md_escape(config.OWNER_HANDLES)}"
+        f"🤖 {config.BRAND_NAME} · managed by {md_escape(config.OWNER_HANDLES)}"
     )
 
 
 def about_text() -> str:
     return (
-        "📢 *Sarkari Job Alert Bot*\n"
+        f"📢 *{config.BRAND_NAME}* — Technical Sarkari Job Alert Bot\n"
         f"{DIVIDER}\n"
-        "Scrapes the latest government vacancy listings and pushes personalised "
-        "Telegram alerts based on your category, age, degrees, documents and "
-        "preferred job sectors\\.\n\n"
+        f"{config.BRAND_NAME} watches the government job portals around the clock "
+        "and pushes personalised Telegram alerts based on your category, age, "
+        "degrees, documents and preferred job sectors\\.\n\n"
         "⚙️ Python · python\\-telegram\\-bot v22 · BeautifulSoup · SQLite / MongoDB\n"
-        "🔄 Automatic checks around the clock · image alerts · reminders\n\n"
+        "🔄 Continuous checks · rich job cards · admit cards · results · reminders\n"
+        "🧩 Optional web dashboard with the full job list\n\n"
         "👑 *Bot Owners*\n"
         "• @TechnicalSerena\n"
         "• @Xioqui\\_xin\n"
         f"{DIVIDER}\n"
-        "_Not affiliated with Sarkari Result\\. Always verify details on the "
+        "_Not affiliated with the job portals\\. Always verify the details in the "
         "official notification before applying\\._"
     )

@@ -1,3 +1,3 @@
-"""Sarkari Job Alert Telegram Bot."""
+"""SERENA - Technical Sarkari Job Alert Telegram Bot."""
 
-__version__ = "1.5.4"
+__version__ = "1.6.0"

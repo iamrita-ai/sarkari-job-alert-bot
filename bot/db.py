@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from bot.models import JobDetail, JobSummary, SavedJob, UserProfile
+from bot.utils import decode_job_id, job_ref
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,8 @@ class Database:
                 last_date      TEXT,
                 first_seen     TEXT NOT NULL,
                 detail_fetched INTEGER NOT NULL DEFAULT 0,
-                detail_json    TEXT
+                detail_json    TEXT,
+                job_ref        TEXT
             );
 
             CREATE TABLE IF NOT EXISTS notifications (
@@ -108,6 +110,9 @@ class Database:
                 ON jobs(detail_fetched, first_seen);
             CREATE INDEX IF NOT EXISTS idx_saved_reminders
                 ON saved_jobs(reminded, reminder_date);
+            -- NOTE: the index on jobs(job_ref) is created by _migrate() - an
+            -- older database has no such column yet and the statement above
+            -- would abort the whole schema script.
             """
         )
         await self._db.commit()
@@ -121,6 +126,27 @@ class Database:
             await self._db.execute("ALTER TABLE users ADD COLUMN dob TEXT")
             await self._db.commit()
             logger.info("Migration: added users.dob column")
+        async with self._db.execute("PRAGMA table_info(jobs)") as cur:
+            job_columns = {row["name"] for row in await cur.fetchall()}
+        if "job_ref" not in job_columns:
+            await self._db.execute("ALTER TABLE jobs ADD COLUMN job_ref TEXT")
+            await self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_ref ON jobs(job_ref)"
+            )
+            await self._db.commit()
+            # Backfill the reference of every job stored so far.
+            async with self._db.execute(
+                "SELECT job_id FROM jobs WHERE job_ref IS NULL"
+            ) as cur:
+                rows = await cur.fetchall()
+            for row in rows:
+                await self._db.execute(
+                    "UPDATE jobs SET job_ref = ? WHERE job_id = ?",
+                    (job_ref(row["job_id"]), row["job_id"]),
+                )
+            if rows:
+                await self._db.commit()
+            logger.info("Migration: added jobs.job_ref column (%d rows)", len(rows))
         for column in ("degrees", "documents"):
             if column not in columns:
                 await self._db.execute(
@@ -270,10 +296,11 @@ class Database:
         await self._db.executemany(
             """
             INSERT OR IGNORE INTO jobs
-                (job_id, url, title, last_date, first_seen, detail_fetched)
-            VALUES (?, ?, ?, ?, ?, 0)
+                (job_id, url, title, last_date, first_seen, detail_fetched, job_ref)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
             """,
-            [(j.job_id, j.url, j.title, j.last_date, now) for j in jobs],
+            [(j.job_id, j.url, j.title, j.last_date, now, job_ref(j.job_id))
+             for j in jobs],
         )
         await self._db.commit()
 
@@ -328,6 +355,21 @@ class Database:
         if not row:
             return None
         return JobSummary(row["job_id"], row["title"], row["url"], row["last_date"])
+
+    async def get_job_by_ref(self, ref: str) -> JobSummary | None:
+        """Resolve a short job reference (or a legacy base64 job id)."""
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT job_id, url, title, last_date FROM jobs WHERE job_ref = ?",
+            (ref,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row:
+            return JobSummary(row["job_id"], row["title"], row["url"], row["last_date"])
+        legacy = decode_job_id(ref)
+        if legacy:
+            return await self.get_job(legacy)
+        return None
 
     async def list_jobs(self, limit: int = 100) -> list[JobSummary]:
         assert self._db is not None

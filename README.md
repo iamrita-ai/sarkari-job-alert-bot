@@ -1,6 +1,6 @@
-# 🚨 Sarkari Job Alert Bot
+# 🚨 SERENA — Technical Sarkari Job Alert Bot
 
-A personalised Telegram bot that scrapes **[SarkariResult.com](https://www.sarkariresult.com/)**
+**SERENA** is a personalised Telegram bot that scrapes **[SarkariResult.com](https://www.sarkariresult.com/)**
 for the latest government job notifications and pushes **instant Telegram
 alerts** matched against each user's profile — name, reservation category,
 degrees, documents on hand and preferred job sectors.
@@ -10,6 +10,10 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
 **Voroa / getvoroa**, a VPS or your laptop.
 
 > 👑 Bot owners: **@TechnicalSerena** & **@Xioqui_xin**
+>
+> 📸 **New look (v1.6):** the bot now uses the **SERENA** brand, ships a new
+> profile picture and a new welcome banner, and every command, button and
+> card has been polished for production.
 
 ---
 
@@ -32,6 +36,16 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
   - **age matching** — the DOB is turned into an age and checked against each
     post's min/max age with the standard GoI category relaxation (OBC/EWS +3,
     SC/ST +5); the card explains the decision
+- 🎫 **Admit cards & results as first-class content** — `/admit` lists the
+  latest admit cards, `/result` the latest results; both open the same
+  Previous/Next browser with tappable job titles, so a candidate never has to
+  hunt for the notice page
+- 💬 **Owner contact inside Telegram** — `/contact` (or the *Contact owner*
+  button in the main menu) forwards a bug report, a suggestion or an offer to
+  help straight to the owner, and the owner answers with `/reply <chat_id> …`
+- 🔁 **Redundant data sources** — the chain is now
+  `mirror → mirror-jina → original → original-jina`: the mirror is also read
+  through the reader proxy, so a single blocked host can never silence the bot
 - 🗂️ **12 job sectors** — Railway, SSC, UPSC, Defence & Police, Banking &
   Insurance, Teaching, State Govt, PSU, Courts, Medical, Clerk/DEO, Apprentice
 - 🖼️ **Rich MarkdownV2 job cards with images** — job name (hyperlink),
@@ -63,7 +77,9 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
     people who already got that job when the **admit card is published**, the
     **exam date is fixed** or the **last date is extended**;
   - **☀️ Daily digest** every morning at 09:05 IST — yesterday's new
-    matching jobs plus the saved jobs closing within three days;
+    matching jobs plus the saved jobs closing within three days. Every job in
+    the digest is a **button**: tap it and the full job card opens, exactly
+    like an instant alert;
   - **📢 Channel mirror**: every new vacancy is also posted to your own
     Telegram channel (`BROADCAST_CHANNEL_ID`)
 - 🧠 **Optional AI summary** (Groq, free tier) — the long eligibility text is
@@ -97,8 +113,11 @@ Built with **python-telegram-bot (PTB v22)**, **BeautifulSoup**, **httpx** and
   catalogued job in a browser), `/sources` (owner-only)
 - 🩺 **Health endpoint** (`/health`) with live scraper status for Render/Voroa
 - 🛡️ **Production hardening** — global error handler, overlap-safe scheduler,
-  bootstrap protection against mass-notifications on deploy
-- 🧪 **78 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
+  bootstrap protection against mass-notifications on deploy, and **compact job
+  references**: Telegram allows only 64 bytes of button data, so buttons carry
+  a short hash instead of the notice slug (long slugs used to make Telegram
+  reject the whole message)
+- 🧪 **96 unit tests + CI** for parsers, MarkdownV2 cards, age rules, degrees,
   documents, coloured buttons and storage
 
 ---
@@ -113,8 +132,9 @@ PTB JobQueue (every N min)
       │
       ├─ 1. Source chain until one returns jobs:
       │       sarkariresult.com.cm/latest-jobs/  (mirror, direct HTML)
+      │    → r.jina.ai + mirror listing          (same mirror, reader proxy)
       │    → www.sarkariresult.com/latestjob/    (original, direct)
-      │    → r.jina.ai reader proxy              (last resort)
+      │    → r.jina.ai + original listing        (last resort)
       ├─ 2. Parse listing → new JobSummary rows (jobs table)
       ├─ 3. For jobs someone subscribes to: fetch detail page
       │        → eligibility, age limits, fee, salary, image, apply/PDF links
@@ -133,6 +153,9 @@ PTB JobQueue (every N min)
 | `/profile` | Show saved preferences (incl. D.O.B and computed age) |
 | `/edit` | Profile menu — change name, D.O.B, category, degrees, documents or sectors |
 | `/latest` | Browse matching jobs with Next / Previous pagination |
+| `/admit` | Latest admit cards (Previous / Next browser) |
+| `/result` | Latest results (Previous / Next browser) |
+| `/contact [message]` | Report a bug, send a suggestion — forwarded to the owner |
 | `/saved` | Bookmarked jobs and your active date reminders |
 | `/pause` / `/resume` | Stop / restart automatic alerts |
 | `/help` / `/about` | Usage guide and bot credits |
@@ -146,6 +169,7 @@ PTB JobQueue (every N min)
 | `/latest <state>` | Browse matching jobs of one state (`/latest bihar`) |
 | `/digest` | 👑 Owners — preview the daily digest |
 | `/channel` | 👑 Owners — post a test message to the broadcast channel |
+| `/reply <chat_id> <text>` | 👑 Owners — answer a user who used `/contact` |
 
 ### 📰 What exactly is "Sarkari Result"? (and what it is *not*)
 
@@ -241,6 +265,31 @@ sarkari-job-alert-bot/
 ```
 
 ### 📦 Release notes
+
+- **v1.6.0** — *production polish*:
+  - **More fallback sources**: the chain is now
+    `mirror → mirror-jina → original → original-jina` — the mirror is also
+    read through the reader proxy, so one blocked host can never stop the bot
+  - **`/admit` and `/result`**: admit cards and results are now first-class
+    content instead of an afterthought — both open the same Previous/Next
+    browser with tappable job titles
+  - **`/contact`**: users can report a bug, send a suggestion or offer help
+    from inside Telegram (a *Contact owner* button was added to the main menu);
+    the owner answers with `/reply <chat_id> <text>`
+  - **SERENA branding**: new profile picture (upload it in BotFather —
+    Telegram does not let a bot set its own avatar), new welcome banner and
+    the new name on every card, the welcome message and the web dashboard
+  - **The digest is tappable**: the line *"Turn these off with /pause"* is
+    gone and every job in the digest is a button that opens the full job card
+  - **Richer `/help`**: a step-by-step guide (profile → alerts → browsing →
+    saving → notifications → help) with every command explained
+  - **Compact job references**: Telegram allows only 64 bytes of button data.
+    Notice slugs are longer than that, so a long notice used to make Telegram
+    reject the *whole* message. Buttons now carry a short hash that is
+    resolved through the database (old buttons keep working)
+  - **The web dashboard now really works in production**: it listens on the
+    platform port (`PORT`), answers `/health` itself and is reachable through
+    the public URL — see the environment section below
 
 - **v1.5.4** — the MarkdownV2 bug that killed the next step: the text
   *"pick several — ITI + B.Ed, B.Sc + M.Com"* contained an **unescaped `+`**,
@@ -405,12 +454,61 @@ docker run -d --name sarkari-bot \
 | `MIRROR_LISTING_PATH` | `/latest-jobs/` | Mirror listing page |
 | `ORIGINAL_BASE_URL` | `https://www.sarkariresult.com` | Original site (backup) |
 | `ORIGINAL_LISTING_PATH` | `/latestjob/` | Original listing page |
-| `SOURCE_ORDER` | `mirror,original,original-jina` | Failover order for data sources |
+| `MIRROR_ADMIT_CARD_PATH` | `/admit-card/` | Mirror page used by `/admit` |
+| `MIRROR_RESULT_PATH` | `/result/` | Mirror page used by `/result` |
+| `SOURCE_ORDER` | `mirror,mirror-jina,original,original-jina` | Failover order for data sources |
 | `USE_JINA_FALLBACK` | `true` | Allow the reader-proxy last resort |
 | `JINA_API_KEY` | — | Optional key for higher r.jina.ai rate limits |
 | `MAX_DETAIL_FETCHES_PER_RUN` | `8` | Detail pages fetched per cycle (politeness cap) |
 | `REQUEST_DELAY_SECONDS` | `2` | Pause between detail-page requests |
 | `HTTPS_PROXY` | — | Standard env var; httpx uses it automatically if needed |
+| `BRAND_NAME` | `SERENA` | Product name shown in the bot and the dashboard |
+| `OWNER_PRIMARY` | `TechnicalSerena` | Owner handle used by `/contact` |
+| `ENABLE_WEB_APP` | `false` | Turn the optional web dashboard on |
+| `WEB_APP_SECRET` | — | Secret that signs the personal dashboard links |
+| `PUBLIC_BASE_URL` | — | Public address of the deployment (dashboard links) |
+| `WEB_APP_PORT` | `PORT` | Dashboard port — leave empty, the platform port is used |
+| `DIGEST_ENABLED` | `true` | Send the daily 09:05 IST digest |
+| `DIGEST_HOUR` | `9` | Hour of the daily digest (IST) |
+| `CARD_LANGUAGE` | `both` | `en`, `hi` or `both` (Hindi block under the card) |
+| `GROQ_API_KEY` | — | Optional Groq key for the AI summary |
+| `BROADCAST_CHANNEL_ID` | — | Optional channel that mirrors every new vacancy |
+
+---
+
+## 🌐 The web dashboard (optional)
+
+The dashboard is a small **FastAPI** app that runs inside the same process as
+the bot. It shows the full job list with filters and lets a user edit their
+degrees/documents from the phone.
+
+**What to put in Env (Render / Voroa / Docker):**
+
+| Variable | Value | Why |
+|---|---|---|
+| `ENABLE_WEB_APP` | `true` | switches the dashboard on |
+| `WEB_APP_SECRET` | a long random string | signs the personal links (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) |
+| `PUBLIC_BASE_URL` | `https://<your-service>.onrender.com` | the address the *Open Dashboard* button points to |
+| `WEB_APP_PORT` | leave **empty** | the dashboard then listens on `PORT` — the only port the platform exposes — and answers `/health` itself |
+
+```bash
+# local
+pip install -r requirements-web.txt
+ENABLE_WEB_APP=true \
+WEB_APP_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))") \
+PUBLIC_BASE_URL=https://my-service.onrender.com \
+python -m bot
+```
+
+**How a user reaches it:** `/webapp` in Telegram → the bot answers with an
+*🚀 Open Dashboard* button that carries a signed, user-specific link
+(`HMAC(user_id, WEB_APP_SECRET)`) → the browser opens the dashboard. Without
+`WEB_APP_SECRET` or `PUBLIC_BASE_URL` the command explains what is missing
+instead of sending a broken link.
+
+> ⚠️ Only **one** process may poll the same bot token. A second instance
+> (e.g. the old Render service still running) makes Telegram cancel the
+> first one with `409 Conflict` — stop the old deployment before redeploying.
 
 ---
 

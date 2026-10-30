@@ -4,7 +4,7 @@ services:
       context: .
       args:
         # Set to "true" to bake the optional web dashboard (FastAPI) into the
-        # image, then uncomment ENABLE_WEB_APP / WEB_APP_PORT below.
+        # image, then uncomment ENABLE_WEB_APP below.
         INSTALL_WEB: "false"
     image: sarkari-job-alert-bot:latest
     container_name: sarkari-job-alert-bot
@@ -14,9 +14,10 @@ services:
     environment:
       ENABLE_HEALTH_SERVER: "true"
       PORT: "8080"
-      # --- optional web dashboard (v1.5) -------------------------------
+      # --- optional web dashboard (v1.6) -------------------------------
+      # The dashboard listens on PORT (the port that is published below) and
+      # answers /health itself - no second port needed.
       # ENABLE_WEB_APP: "true"
-      # WEB_APP_PORT: "8081"
       # WEB_APP_SECRET: "replace-with-a-long-random-string"
       # PUBLIC_BASE_URL: "https://your-domain"
     ports:

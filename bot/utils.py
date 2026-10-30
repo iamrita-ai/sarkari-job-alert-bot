@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 from datetime import date, datetime
 
@@ -84,6 +85,43 @@ def parse_slash_date(text: str | None) -> date | None:
 
 
 # ------------------------------------------------------------- deep links
+def job_ref(job_id: str) -> str:
+    """A short reference for a job id.
+
+    Telegram allows only 64 bytes of callback data and 64 characters in a
+    deep-link payload, while a job id (the notice slug) can be 80+
+    characters. The reference is a stable short hash - the database maps it
+    back to the job id.
+    """
+    return hashlib.sha1(job_id.encode("utf-8")).hexdigest()[:12]
+
+
+def remember_jobs(application, jobs) -> None:  # noqa: ANN001
+    """Keep a short-lived map of reference -> job.
+
+    A notice that is newer than the last database sync is not in the
+    ``jobs`` table yet. Its buttons (save, reminder, ...) must still work,
+    so the freshly fetched jobs are remembered in memory.
+    """
+    store = application.bot_data.setdefault("job_refs", {})
+    for job in jobs:
+        store[job_ref(job.job_id)] = job
+    if len(store) > 1000:  # keep the map small
+        for key in list(store)[:200]:
+            store.pop(key, None)
+
+
+async def resolve_job(application, ref: str):  # noqa: ANN001
+    """Resolve a job reference: the live map first, then the database."""
+    job = application.bot_data.get("job_refs", {}).get(ref)
+    if job is not None:
+        return job
+    db = application.bot_data.get("db")
+    if db is None:
+        return None
+    return await db.get_job_by_ref(ref)
+
+
 def encode_job_id(job_id: str) -> str:
     """URL-safe base64 without padding - valid inside /start payloads."""
     return base64.urlsafe_b64encode(job_id.encode()).rstrip(b"=").decode()

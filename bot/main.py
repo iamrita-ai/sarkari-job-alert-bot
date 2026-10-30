@@ -166,9 +166,12 @@ async def _post_init(app: Application) -> None:
         BotCommand("profile", "Show your saved preferences"),
         BotCommand("edit", "Edit name, DOB, category, degrees, documents, sectors"),
         BotCommand("latest", "Browse matching jobs (Next / Previous)"),
+        BotCommand("admit", "Latest admit cards"),
+        BotCommand("result", "Latest results"),
         BotCommand("saved", "Your bookmarked jobs & reminders"),
         BotCommand("pause", "Pause job alerts"),
         BotCommand("resume", "Resume job alerts"),
+        BotCommand("contact", "Contact the owner - bugs & suggestions"),
         BotCommand("help", "Help & usage"),
         BotCommand("about", "About this bot & owners"),
         BotCommand("webapp", "Open your personal web dashboard"),
@@ -200,6 +203,9 @@ def _start_health_servers() -> None:
     ports: list[int] = [config.PORT]
     ports.extend(p for p in FALLBACK_PORTS if p != config.PORT)
     for port in ports:
+        if config.ENABLE_WEB_APP and port == config.WEB_APP_PORT:
+            # The dashboard owns this port and answers /health itself.
+            continue
         try:
             server = start_health_server(port, status_provider=_health_status)
         except OSError:
@@ -310,7 +316,7 @@ def main() -> None:
     register_reminders(app)
     register_inline(app)
     logger.info(
-        "Sarkari Job Alert Bot starting (check every %.0f min, owners: %s)",
+        "SERENA starting (check every %.0f min, owners: %s)",
         config.CHECK_INTERVAL_MINUTES,
         ", ".join(sorted(config.OWNER_USERNAMES)),
     )

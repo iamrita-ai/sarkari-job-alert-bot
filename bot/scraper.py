@@ -158,6 +158,46 @@ def _mirror_job_from_anchor(anchor, base_url: str) -> JobSummary | None:
     )
 
 
+def parse_mirror_listing_markdown(markdown: str, base_url: str) -> list[JobSummary]:
+    """Parse the mirror listing when it arrives through the reader proxy.
+
+    The reader returns one markdown bullet per job:
+    ``* [Title](url) - Last Date: 25 November 2026``
+    """
+    if JINA_ERROR_RE.search(markdown):
+        raise ScraperError("Reader proxy returned the source site's error page")
+    jobs: dict[str, JobSummary] = {}
+    for line in markdown.splitlines():
+        for raw_text, raw_url in MD_LINK_RE.findall(line):
+            href = urljoin(base_url, _unescape_md(raw_url).split("#")[0])
+            if not MIRROR_JOB_RE.match(href):
+                continue
+            slug = urlparse(href).path.strip("/")
+            if slug in MIRROR_BLOCKLIST:
+                continue
+            title = _clean(_unescape_md(raw_text))
+            if len(title) < 12 or not (YEAR_RE.search(title)
+                                       or JOB_WORD_RE.search(title)):
+                continue
+            title = re.split(r"\s*[\u2013-]\s*Last Date", title,
+                             flags=re.IGNORECASE)[0]
+            tail = line.split(raw_url, 1)[-1]
+            last_date = None
+            if match := MIRROR_DATE_RE.search(tail):
+                last_date = _normalize_date(*match.groups())
+            elif match := LAST_DATE_RE.search(tail):
+                last_date = match.group(1)
+            summary = JobSummary(
+                job_id="/" + slug,
+                title=_clean(title),
+                url=href,
+                last_date=last_date,
+            )
+            if summary.job_id not in jobs:
+                jobs[summary.job_id] = summary
+    return list(jobs.values())
+
+
 def parse_mirror_listing_html(html: str, base_url: str) -> list[JobSummary]:
     soup = BeautifulSoup(html, "html.parser")
     container = (
@@ -986,6 +1026,12 @@ class SarkariScraper:
             url = config.MIRROR_BASE_URL + config.MIRROR_LISTING_PATH
             html = await self._get(url)
             jobs = parse_mirror_listing_html(html, url)
+        elif source == "mirror-jina":
+            # same site, but through the reader proxy (works when the
+            # data centre IP is blocked by CloudFront)
+            url = config.MIRROR_BASE_URL + config.MIRROR_LISTING_PATH
+            markdown = await self._get_via_jina(url)
+            jobs = parse_mirror_listing_markdown(markdown, url)
         elif source == "original":
             url = config.ORIGINAL_BASE_URL + config.ORIGINAL_LISTING_PATH
             html = await self._get(url)
@@ -998,6 +1044,23 @@ class SarkariScraper:
             raise ScraperError(f"Unknown source '{source}'")
         if not jobs:
             raise ScraperError(f"Source '{source}' returned zero parseable jobs")
+        return jobs
+
+    async def fetch_section(self, path: str) -> list[JobSummary]:
+        """Latest notices of a section (admit cards, results, ...).
+
+        Uses the same source chain as the main listing, so the section keeps
+        working even if the first source is blocked.
+        """
+        url = config.MIRROR_BASE_URL + path
+        try:
+            html = await self._get(url)
+            jobs = parse_mirror_listing_html(html, url)
+        except ScraperError:
+            markdown = await self._get_via_jina(url)
+            jobs = parse_mirror_listing_markdown(markdown, url)
+        if not jobs:
+            raise ScraperError(f"Section '{path}' returned zero parseable jobs")
         return jobs
 
     async def fetch_latest_jobs(self) -> list[JobSummary]:
@@ -1026,8 +1089,13 @@ class SarkariScraper:
     async def fetch_job_detail(self, url: str) -> JobDetail:
         host = _host(url)
         if host == "sarkariresult.com.cm":
-            html = await self._get(url)
-            return parse_mirror_detail_html(html, url)
+            try:
+                html = await self._get(url)
+                return parse_mirror_detail_html(html, url)
+            except ScraperError:
+                # the mirror itself is blocked -> reader proxy
+                markdown = await self._get_via_jina(url)
+                return parse_detail_markdown(markdown, url)
 
         # Original site: direct first, reader proxy second
         try:

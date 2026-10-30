@@ -43,7 +43,7 @@ def _inline_card(job: JobSummary, detail: JobDetail | None,
 def _inline_keyboard(job: JobSummary, detail: JobDetail | None,
                      bot_username: str | None) -> InlineKeyboardMarkup:
     from telegram.constants import KeyboardButtonStyle
-    from bot.utils import encode_job_id
+    from bot.utils import job_ref
     row: list[InlineKeyboardButton] = []
     if detail and detail.apply_url:
         row.append(InlineKeyboardButton(
@@ -54,7 +54,7 @@ def _inline_keyboard(job: JobSummary, detail: JobDetail | None,
     ))
     rows = [row]
     if bot_username:
-        deep_payload = "j" + encode_job_id(job.job_id)
+        deep_payload = "j" + job_ref(job.job_id)
         rows.append([InlineKeyboardButton(
             "🤖 Open in Bot", url=f"https://t.me/{bot_username}?start={deep_payload}",
             style=KeyboardButtonStyle.PRIMARY,

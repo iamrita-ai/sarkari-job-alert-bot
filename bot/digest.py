@@ -14,6 +14,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from bot import config, matcher
+from bot.keyboards import digest_keyboard
 from bot.utils import md_escape, parse_slash_date
 
 logger = logging.getLogger(__name__)
@@ -30,8 +31,8 @@ def _closing_soon(last_date: str | None) -> bool:
     return today <= target <= today + timedelta(days=CLOSING_WINDOW_DAYS)
 
 
-async def build_digest(application, profile) -> str | None:  # noqa: ANN001
-    """Digest text for one subscriber (None when there is nothing to say)."""
+async def collect_digest(application, profile):  # noqa: ANN001
+    """The jobs of one digest: (new matches, saved jobs closing soon)."""
     db = application.bot_data["db"]
     since = (datetime.now(timezone.utc) - timedelta(hours=26)).isoformat(
         timespec="seconds")
@@ -39,6 +40,17 @@ async def build_digest(application, profile) -> str | None:  # noqa: ANN001
     matched = [job for job in new_jobs if matcher.title_matches(profile, job)]
     saved = await db.list_saved(profile.user_id)
     closing = [item for item in saved if _closing_soon(item.last_date)]
+    return matched, closing
+
+
+async def build_digest(application, profile, jobs=None) -> str | None:  # noqa: ANN001
+    """Digest text for one subscriber (None when there is nothing to say).
+
+    ``jobs`` is the optional ``(matched, closing)`` tuple of
+    :func:`collect_digest` - pass it to avoid a second database round trip.
+    """
+    matched, closing = jobs if jobs is not None else await collect_digest(
+        application, profile)
 
     if not matched and not closing:
         return None
@@ -60,7 +72,6 @@ async def build_digest(application, profile) -> str | None:  # noqa: ANN001
             date_tag = f" — `{item.last_date}`" if item.last_date else ""
             lines.append(f"• [{md_escape(item.title[:80])}]({item.url}){date_tag}")
     lines.append(DIVIDER)
-    lines.append("🔔 Turn these off with /pause · manage with /profile")
     return "\n".join(lines)
 
 
@@ -77,7 +88,8 @@ async def send_daily_digest(context) -> int:  # noqa: ANN001
     sent = 0
     for profile in users:
         try:
-            text = await build_digest(application, profile)
+            matched, closing = await collect_digest(application, profile)
+            text = await build_digest(application, profile, (matched, closing))
         except Exception:  # noqa: BLE001
             logger.exception("Digest failed for %s", profile.user_id)
             continue
@@ -87,6 +99,7 @@ async def send_daily_digest(context) -> int:  # noqa: ANN001
             await context.bot.send_message(
                 chat_id=profile.user_id, text=text,
                 parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True,
+                reply_markup=digest_keyboard(matched, closing),
             )
             sent += 1
         except TelegramError:

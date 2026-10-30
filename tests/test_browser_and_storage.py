@@ -5,7 +5,7 @@ from bot.cards import list_page, saved_list_card
 from bot.db import Database
 from bot.keyboards import browse_keyboard, saved_browse_keyboard
 from bot.models import JobSummary
-from bot.utils import decode_job_id, encode_job_id
+from bot.utils import job_ref
 
 JOB = JobSummary("/railway-x-2026", "Railway X Online Form 2026",
                  "https://sarkariresult.com.cm/railway-x-2026/", "25/11/2026")
@@ -38,11 +38,12 @@ def test_first_page_hides_previous_last_page_hides_next():
 def test_list_page_deep_links_open_the_bot_card():
     base = "https://t.me/jobbot?start=j"
     text = list_page([JOB], 0, 1, "Latest", deep_base=base)
-    expected = base + encode_job_id(JOB.job_id)
+    expected = base + job_ref(JOB.job_id)
     assert f"({expected})" in text
-    # Deep link round-trips back to the real job id
+    # The deep link carries a short reference (Telegram allows 64 characters)
     payload = expected.split("start=")[1][1:]
-    assert decode_job_id(payload) == JOB.job_id
+    assert payload == job_ref(JOB.job_id)
+    assert len(payload) <= 64
 
     # Without a bot username the external URL is used
     fallback = list_page([JOB], 0, 1, "Latest")
@@ -78,4 +79,4 @@ def test_saved_list_renders_deep_links():
 
     text = saved_list_card([Saved()], 0, 1, "https://t.me/jobbot?start=j")
     assert "⏰" in text
-    assert encode_job_id(Saved.job_id) in text
+    assert job_ref(Saved.job_id) in text

@@ -18,7 +18,7 @@ services:
       - key: ENABLE_HEALTH_SERVER
         value: "true"
       - key: SOURCE_ORDER
-        value: "mirror,original,original-jina"
+        value: "mirror,mirror-jina,original,original-jina"
       - key: MIRROR_BASE_URL
         value: "https://sarkariresult.com.cm"
       - key: USE_JINA_FALLBACK
@@ -27,10 +27,16 @@ services:
         sync: false
       - key: DATABASE_PATH
         value: "data/bot.db"
-      # --- optional v1.5 extras (set in the Render dashboard) -----------
+      - key: BRAND_NAME
+        value: "SERENA"
+      # --- optional v1.6 extras (set in the Render dashboard) -----------
+      # The dashboard then listens on PORT (the only port Render exposes)
+      # and answers /health itself.
       # - key: ENABLE_WEB_APP
       #   value: "true"          # needs a Docker build with INSTALL_WEB=true
       # - key: WEB_APP_SECRET
+      #   sync: false
+      # - key: PUBLIC_BASE_URL
       #   sync: false
       # - key: BROADCAST_CHANNEL_ID
       #   sync: false
